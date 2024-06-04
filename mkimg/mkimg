@@ -40,14 +40,8 @@ _get_conf_path() {
       "name")"
   _conf="${_dir}/$( \
     _get \
-      "" \
-      "host")/$( \
-      _get \
-        "target" \
-        "device")/$( \
-        _get \
-          "target" \
-          "network").cfg"
+      "img" \
+      "tuple").cfg"
   echo \
     "${_conf}"
 }
