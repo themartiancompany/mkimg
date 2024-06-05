@@ -353,6 +353,801 @@ _close_luks_device() {
     sync
 }
 
+# Creates and opens a LUKS image of the size
+# of the pacstrap directory plus 200MB.
+# $1: image to write on
+# $2: partition size
+# $3: encryption key
+# $4: UNIX time (to generate a date-based uuid)
+# $5: partition label
+# $6: if true, the partition will be writable
+# $7: if true, dm-verity layer will be disabled
+#     to be able to be opened by GRUB
+_run_mkluks() {
+    local _image_path="${1}" \
+          _size="${2}" \
+          _encryption_key="${3}" \
+          _epoch="${4}" \
+          _label="${5}" \
+          _writable="${6}" \
+          _grub="${7}"
+    local _activation_cmd=() \
+          _activation_opts=() \
+          _config_cmd=() \
+          _cryptsetup_opts=(
+            '--type' 'luks2'
+            '--timeout=69042') \
+          _fallocate_opts=(
+            '--length'
+            "${_size}K") \
+          _format_opts=() \
+          _format_cmd=() \
+          _fsuuid \
+          _key_msg="" \
+          _key_opts=() \
+          _key_size='512' \
+          _mapper \
+          _msg=() \
+          _pbkdf_memory='256' \
+          _sector_size='4096' \
+          _uuid_set_cmd=()
+
+    _fsuuid="$(_get_epoch_fsuuid "${_epoch}")"
+    _mapper=$(basename "${_image_path}")".map"
+    image_device="/dev/mapper/${_mapper}"
+
+    if [[ "${_encryption_key}" != "" ]]; then
+        _key_opts=("--key-file=${_encryption_key}")
+        _cryptsetup_opts+=("${_key_opts[@]}")
+        _key_msg="with key $(basename "${_encryption_key}")"
+    fi
+
+    _activation_opts+=("${_cryptsetup_opts[@]}")
+    _format_opts+=(
+      "${_cryptsetup_opts[@]}"
+      '--sector-size' "${_sector_size}"
+      '--key-size' "${_key_size}")
+
+    # Remove as soon as gcrypt adds support for argon2i
+    # and GRUB for the dm-integrity layer
+    if [ "${_grub}" == "true" ]; then
+        _format_opts+=(
+          '--pbkdf' 'pbkdf2')
+    else
+        _format_opts+=(
+          '--pbkdf-memory' "${_pbkdf_memory}"
+          '--integrity' 'hmac-sha512')
+    fi
+
+    if [ "${_writable}" != "true" ]; then
+        _msg_info "Integrity journal disabled"
+        _activation_opts+=(
+          '--persistent' \
+          '--integrity-no-journal' \
+          '--key-size' "${_key_size}")
+    fi
+    _msg=("Creating LUKS image $(basename "${_image_path}")"
+          "with cryptsetup (${_size}KB) ${_key_msg}")
+    _msg_info "${_msg[*]}"
+    _fallocate_opts+=(
+      "$(_validate_fallocate_opts "${_image_path}")")
+    fallocate "${_fallocate_opts[@]}" \
+              "${_image_path}"
+    _format_cmd=(
+      "cryptsetup" "-q"
+                   "-y" "luksFormat" "${_format_opts[*]}"
+                                     "${_image_path}")
+    while ! eval "${_format_cmd[*]}"; do
+        sleep 1
+    done
+
+    _msg_info "Setting label ${_label}"
+    _config_cmd=("cryptsetup" "config" "${_cryptsetup_opts[*]}"
+                                       "${_image_path}"
+                                         "--label" "${_label}")
+    while ! eval "${_config_cmd[*]}"; do
+        _close_luks_device "${image_device}"
+    done
+
+    _msg_info "Setting UUID ${_fsuuid}"
+    _uuid_set_cmd=(
+      "cryptsetup" "-q"
+                   "-y"
+                   "luksUUID" "--uuid ${_fsuuid}"
+                              "${_image_path}")
+    while ! eval "${_uuid_set_cmd[*]}"; do
+        _close_luks_device "${image_device}"
+    done
+
+    _close_luks_device "${image_device}"
+
+    _msg_info "Opening device on mapper ${_mapper}"
+    _activation_cmd=(
+      "cryptsetup" "${_activation_opts[*]}"
+                   "open" "${_image_path}"
+                          "${_mapper}")
+    while ! eval "${_activation_cmd[*]}"; do
+        _close_luks_device "${image_device}"
+    done
+    _msg_info "Done!"
+}
+
+
+## RAID
+
+# Creates and opens a RAID device
+# $1: RAID name
+# $2: RAID type (only '1' for now)
+_run_mkraid() {
+    # local _image_path="${1}"
+    # local _dev_path="${1}"
+    local _name="${1}"
+    # local _size="${2}" # should go into the array
+    local _type="${2}"
+    shift 3
+    local _devices=("$@")
+    mdadm --create "/dev/md${_name}.map" \
+          --level="${_type}" \
+          --run \
+          "${_devices[@]}"
+}
+
+## SQUASHFS
+
+# Creates a squashfs image from a
+# file system image or directory.
+# $1: directory or a file system image
+# $2: path of the result image
+_run_mksquashfs() {
+    local _directory_or_fs="${1}" \
+          _image_path="${2}" \
+          _msg=() \
+          mksquashfs_options=("${_mkfs_options[@]}")
+    [[ ! "${quiet}" == "y" ]] || \
+      mksquashfs_options+=(
+        '-no-progress'
+        '-quiet')
+    _msg=("Creating SQUASHFS image,"
+          "this may take some time...")
+    _msg_info "${_msg[*]}"
+    mksquashfs "${_directory_or_fs}" \
+               "${_image_path}" \
+               -noappend \
+               "${mksquashfs_options[@]}"
+}
+
+
+## SWAP
+
+# Creates a swap image
+# $1: resulting image
+# $2: image size
+# $3: UNIX time (to generate a date-based uuid)
+# $4: partition label
+_run_mkswap() {
+    local _image_path="${1}"
+    local _size="${2}"
+    local _epoch="${3}"
+    local _label="${4}"
+    local _fsuuid
+    _fsuuid="$(_get_epoch_fsuuid "${_epoch}")"
+    dd if=/dev/zero \
+       of="${_image_path}" \
+       bs=1K count="${_size}" \
+       status=progress
+    chmod 0600 "${_image_path}"
+    sync
+    mkswap -L "${_label}" \
+           -U "${_fsuuid}" \
+           "${_image_path}"
+}
+
+#################################################
+# Image making functions
+#################################################
+
+### Utility functions
+
+# Returns internal size for an internal partition 
+# from the outer image size
+# $1: outer partition size
+_get_internal_size() {
+    local _size="${1}" _ratio
+    local _s=50 _S=200 _l=1000 _L=5000
+    if [[ "${_size}" -lt $((_s * 1000)) ]]; then
+        _ratio=60
+    elif [[ "${_size}" -gt $((_s * 1000)) ]] && \
+         [[ "${_size}" -lt $((_S * 1000)) ]]; then
+        _ratio=70
+    elif [[ "${_size}" -gt $((_S * 1000)) ]] && \
+         [[ "${_size}" -lt $((_l * 1000)) ]]; then
+        _ratio=75
+    elif [[ "${_size}" -gt $((_l * 1000)) ]] && \
+         [[ "${_size}" -lt $((_L * 1000)) ]]; then
+        _ratio=80
+    else
+        _ratio=85
+    fi
+    echo $(((_size * _ratio)/100))
+}
+
+### Base types
+
+## BTRFS (file system with many features)
+
+# Creates a btrfs file system image
+# $1: directory to use to generate the image
+# $2: image path
+# $3: image size
+# $4: UNIX time (for a date-based uuid)
+# $5: partition label
+_mkimg_btrfs() {
+    local _dir="${1}"
+    local _image_path="${2}"
+    local _size="${3}"
+    local _epoch="${4}"
+    local _label="${5}"
+    local _writable="true"
+    if [[ "${_size}" == "" ]]; then
+	_msg_info "Pre-running mkerofs to determine LUKS partition size"
+        _run_mkbtrfs "${_tmp_img}" \
+                     "${_dir}" \
+                     "${_epoch}"
+        _tmp_size=$(_get_size "${_tmp_img}")
+        _size=$(( 69420 + _tmp_size * 12 / 10))
+    fi
+    _run_mkbtrfs "${_dir}" \
+                 "$(_get_internal_size "${_size}")" \
+                 "${_epoch}" \
+                 "${_label}" \
+                 "${_writable}"
+    sync
+    _msg_info "Done!"
+}
+
+
+## EROFS (compressed read-only image type)
+
+# Create an EROFS image containing the root file system and saves it on the ISO 9660 file system.
+# $1: image path
+# $2: directory to be put onto the image
+# $3: UNIX time (for a date-based uuid)
+_mkimg_erofs() {
+    local _image_path="${1}"
+    local _dir="${2}"
+    local _epoch="${3}"
+    _run_mkerofs "${_image_path}" \
+                 "${_dir}" \
+                 "${_epoch}"
+    _msg_info "Done!"
+}
+
+## EXT4 (easily readable file system)
+
+# Creates an ext4 file system image
+# $1: directory to use to generate the image
+# $2: image path
+# $3: image size
+# $4: UNIX time (for a date-based uuid)
+# $5: partition label
+_mkimg_ext4() {
+    local _dir="${1}"
+    local _image_path="${2}"
+    local _size="${3}"
+    local _epoch="${4}"
+    local _label="${5}"
+    local _writable="true"
+    _run_mkext4 "${_dir}" \
+                "$(_get_internal_size "${_size}")" \
+                "${_epoch}" \
+                "${_label}" \
+                "${_writable}"
+    mv "${_dir}.img" "${_image_path}"
+    sync
+    _msg_info "Done!"
+}
+
+## FAT
+
+# Creates a fat image.
+# $1: image path
+# $2: image size in bytes
+# $3: image label
+_mkimg_fat() {
+    _run_mkfat "${@}"
+}
+
+## LUKS (encrypted file system container)
+
+# Steps shared by the mkimg+<fs_image_type>+luks functions
+# $1: name for the device mapper
+# $2: an encryption key (prompts for one if empty)
+# $3: partition label
+_mkluks_common() {
+    local _name="${1}" \
+          _key="${2}" \
+          _label="${3}"
+    local _out="${work_dir}/${_label}.key"
+    if [ "${_key}" = "" ]; then
+        _ask_passwd "${_name}" "${_label}"
+        printf "%s" "${_passphrase}" > "${_out}"
+        _encryption_key="${_out}"
+    elif [ "${_key}" = "auto" ]; then
+        printf "%s" "$(tr -dc A-Za-z0-9 </dev/urandom | \
+                         head -c 20 ; \
+                       echo '')" > "${_out}"
+        _encryption_key="${_out}"
+    fi
+}
+
+## SQUASHFS (compressed read-only image type)
+
+# Creates a squash fs image.
+# $1: directory to create the squashfs image with
+# $2: resulting image path
+_mkimg_squashfs() {
+    local _dir="${1}"
+    local _image_path="${2}"
+    _run_mksquashfs "${_dir}" \
+                    "${_image_path}"
+}
+
+## SWAP (on-disk virtual memory)
+
+# Creates a swap image.
+# $1: path of the resulting image
+# $2: partition size
+# $3: UNIX time (for a date-based uuid)
+# $4: partition label
+_mkimg_swap() {
+    _run_mkswap "${@}"
+}
+
+### 2-layered types
+
+## EROFS over LUKS (encrypted compressed
+#                   read-only image type)
+
+# Create an EROFS image containing the root file system and saves it on the LUKS image.
+# Save the LUKS image on the ISO 9660 file system.
+# $1: device mapper name
+# $2: directory to put inside the image
+# $3: image path
+# $4: image size
+# $5: encryption key
+# $6: UNIX time (for a datetime-based uuid)
+# $7: partition label
+# $8: if true, the dm-verity layer will be disabled so that the image can be opened from GRUB
+_mkimg_erofs+luks() {
+    local _name="${1}" \
+          _dir="${2}" \
+          _image_path="${3}" \
+          _size="${4}" \
+          _encryption_key="${5}" \
+          _epoch="${6}" \
+          _label="${7}" \
+          _grub="${8}" \
+          _writable="false" \
+          _tmp_img="$(_get "work" \
+                           "dir")/tmp.erofs" \
+          _tmp_size
+    if [[ "${_size}" == "" ]]; then
+	    _msg_info "Pre-running mkerofs to determine LUKS partition size"
+        _run_mkerofs "${_tmp_img}" \
+                     "${_dir}" \
+                     "${_epoch}"
+        _tmp_size=$(_get_size "${_tmp_img}")
+        _size=$(( 69420 + _tmp_size * 12 / 10))
+    fi
+    _mkluks_common "${_name}" \
+                   "${_encryption_key}" \
+                   "${_label}"
+    _run_mkluks "${_image_path}" \
+                "${_size}" \
+                "${_encryption_key}" \
+                "${_epoch}" \
+                "${_label}" \
+                "${_writable}" \
+                "${_grub}"
+    if [[ "${_tmp_size}" != "" ]]; then
+        _msg_info "Copying erofs image"
+	if [[ "${quiet}" == "y" ]]; then
+            dd if="${_tmp_img}" \
+               of="${image_device}" > /dev/null 2>&1
+	else
+            dd if="${_tmp_img}" \
+               of="${image_device}"
+	fi
+    else
+	msg_info "Writing erofs image"
+        _run_mkerofs "${image_device}" \
+                     "${_dir}" \
+                     "${_epoch}"
+    fi 
+    sync
+    _close_luks_device "${image_device}"
+}
+
+## EXT4 over LUKS (encrypted image type)
+
+# Creates an ext4 fs inside a LUKS container image file.
+# $1: device mapper name
+# $2: directory to be put onto the image
+# $3: image path
+# $4: image size
+# $5: encryption key
+# $6: UNIX time (for a date-based uuid)
+# $7: partion label
+# $8: if true, the dm-verity will be disabled to let GRUB open it
+_mkimg_ext4+luks() {
+    local _name="${1}" \
+          _dir="${2}" \
+          _image_path="${3}" \
+          _size="${4}" \
+          _encryption_key="${5}" \
+          _epoch="${6}" \
+          _label="${7}" \
+          _grub="${8}" \
+          _writable="true"
+    _mkluks_common "${_name}" \
+                   "${_encryption_key}" \
+                   "${_label}"
+    _run_mkluks "${_image_path}" \
+                "${_size}" \
+                "${_encryption_key}" \
+                "${_epoch}" \
+                "${_label}" \
+                "${_writable}" \
+                "${_grub}"
+    _run_mkext4 "${_dir}" \
+                "$(_get_internal_size "${_size}")" \
+                "${_epoch}" \
+                "${_name}" \
+                "${_writable}"
+    dd if="${_dir}.img" \
+       of="${image_device}" > /dev/null 2>&1
+    sync
+    _close_luks_device "${image_device}"
+    _msg_info "Done!"
+    rm -- "${_dir}.img"
+}
+
+## EXT4 over RAID (high-availability/high-performance
+#                  image type)
+
+# Creates or expand an ext4-formatted RAID array
+# $1: RAID name
+# $2: files to be put onto the RAID
+# $@: devices, in the following format <todo>
+_mkimg+ext4+raid1() {
+  local _name="${1}"
+  local _dir="${2}"
+  shift 2
+  local _array=("${@}")
+  _run_mkraid "${_name}"
+  echo "${_array[@]}"
+}
+
+## EXT4 over SQUASHFS (easily supported file system over
+##                     read-only compressed container)
+
+# Creates an ext4 file system inside a squashfs image.
+# $1: partition label
+# $2: directory to put inside the image
+# $3: image path
+# $4: image size
+# $5: UNIX time (for a datetime-based uuid)
+_mkimg_ext4+squashfs() {
+    local _label="${1}"
+    local _dir="${2}"
+    local _image_path="${3}"
+    local _size="${4}"
+    local _epoch="${5}"
+    local _writable="false"
+    _run_mkext4 "${_dir}" \
+                "$(_get_internal_size "${_size}")" \
+                "${_epoch}" \
+                "${_name}" \
+                "${_writable}"
+    _run_mksquashfs "${_dir}.img" \
+                    "${_image_path}"
+    _msg_info "Done!"
+    rm -- "${_dir}.img"
+}
+
+# SQUASHFS over LUKS (encrypted compressed
+#                     read-only image type)
+
+# Creates a squashfs image and saves it on a LUKS image.
+# $1: device mapper name
+# $2: directory to put inside the image
+# $3: image path
+# $4: image size
+# $5: encryption key
+# $6: UNIX time (for a datetime-based uuid)
+# $7: partition label
+# $8: if true, the image will be writable
+# $9: if true, the dm-verity layer will be disabled 
+#     so that the image can be opened from GRUB
+_mkimg_squashfs+luks() {
+    local _name="${1}"
+    local _dir="${2}"
+    local _image_path="${3}"
+    local _size="${4}"
+    local _encryption_key="${5}"
+    local _epoch="${6}"
+    local _label="${7}"
+    local _writable="${8}"
+    local _grub="${9}"
+    _mkluks_common "${_name}" \
+                   "${_encryption_key}" \
+                   "${_label}"
+    _run_mkluks "${_image_path}" \
+                "${_size}" \
+                "${_encryption_key}" \
+                "${_epoch}" \
+                "${_label}" \
+                "${_writable}" \
+                "${_grub}"
+    _run_mksquashfs "${_dir}" \
+                    "${image_device}"
+    sync
+    _close_luks_device "${image_device}"
+}
+
+## SWAP over LUKS (encrypted swap)
+
+# Creates a swap partition inside a LUKS container image file.
+# $1: device mapper name
+# $2: LUKS image path
+# $3: image size
+# $4: encryption key
+# $5: UNIX time (for a date-based uuid)
+# $6: partition label
+# $7: if true, dm-verity layer will be disabled to open the image from GRUB
+_mkimg_swap+luks() {
+    local _name="${1}"
+    local _image_path="${2}"
+    local _size="${3}"
+    local _encryption_key="${4}"
+    local _epoch="${5}"
+    local _label="${6}"
+    local _grub="${7}"
+    local _writable="true"
+    _mkluks_common "${_name}" \
+                   "${_encryption_key}" \
+                   "${_label}"
+    _run_mkluks "${_image_path}" \
+                "${_size}" \
+                "${_encryption_key}" \
+                "${_epoch}" \
+                "${_label}" \
+                "${_writable}" \
+                "${_grub}"
+    _run_mkswap "${image_device}" \
+                "$(_get_internal_size "${_size}")" \
+                "${_epoch}" \
+                "${_name}"
+    sync
+    _close_luks_device "${image_device}"
+    _msg_info "Done!"
+}
+
+### 3-layered types
+
+## EXT4 over RAID over LUKS (encrypted high-performance/high-availability
+#                            image type)
+
+# Creates an ext4-formatted RAID1 on a LUKS images array
+# $1: RAID name
+# $2: directory to fill the RAID with
+# $3: encryption key
+# $4: UNIX time (to get a date-based UUID)
+# $@: LUKS image paths array
+_mkimg_ext4+raid1+luks() {
+  local _name="${1}"
+  local _dir="${2}"
+  # local _image_path="${3}"
+  # local _size="${4}"
+  local _encryption_key="${3}"
+  local _epoch="${4}"
+  # local _label="${5}"
+  # local _grub="${6}"
+  local _writable="true"
+  shift 4
+  local _images=("$@")
+  local _image
+  for _image in "${_images[@]}"; do
+      echo "${_device}"
+      _mkluks_common "${_name}" \
+                     "${_encryption_key}" \
+                     "${_label}"
+      _run_mkluks "${_image_path}" \
+                  "${_size}" \
+                  "${_encryption_key}" \
+                  "${_epoch}" \
+                  "${_label}" \
+                  "${_writable}" \
+                  "${_grub}"
+  done
+
+  for _device in "${_devices[@]}"; do
+    _close_luks_device "${image_device}"
+  done
+}
+
+## EXT4 OVER SQUASHFS OVER LUKS (encrypted compressed
+#                                read-only image type) 
+
+# Creates an ext4 image and packs it inside a squashfs image.
+# Packs the squash image inside a LUKS image.
+# $1: device mapper name
+# $2: directory to put inside the image
+# $3: image path
+# $4: image size
+# $5: encryption key
+# $6: UNIX time (for a datetime-based uuid)
+# $7: partition label
+# $8: if true, the image will be writable
+# $9: if true, the dm-verity layer will be disabled 
+#     so that the image can be opened from GRUB
+_mkimg_ext4+squashfs+luks() {
+    local \
+      _name="${1}" \
+      _dir="${2}" \
+      _image_path="${3}" \
+      _size="${4}" \
+      _encryption_key="${5}" \
+      _epoch="${6}" \
+      _label="${7}" \
+      _writable="${8}" \
+      _grub="${9}"
+    _mkluks_common "${_name}" \
+                   "${_encryption_key}" \
+                   "${_label}"
+    _run_mkluks "${_image_path}" \
+                "${_size}" \
+                "${_encryption_key}" \
+                "${_epoch}" \
+                "${_label}" \
+                "${_writable}" \
+                "${_grub}"
+    _run_mkext4 "${_dir}" \
+                "$(_get_internal_size "${_size}")" \
+                "${_epoch}" \
+                "${_name}" \
+                "${_writable}"
+    _run_mksquashfs "${_dir}.img" \
+                    "${image_device}"
+    sync
+    _close_luks_device "${image_device}"
+    _msg_info "Done!"
+    rm -- "${_dir}.img"
+}
+
+## Image making funtions arguments generation function
+
+# Get opts for a mkimg<fs_type> function
+# $1: file system composed type (ie. ext4+squashfs+luks)
+_get_mkimg_opts() {
+    local \
+      fs_type="${1}"
+      _btrfs_opts=() \
+      _erofs_opts=() \
+      _erofs_luks_opts=() \
+      _ext4_opts=() \
+      _ext4_luks_opts=() \
+      _ext4_squashfs_luks_opts=() \
+      _fat_opts=() \
+      _squashfs_opts=() \
+      _squashfs_luks_opts=() \
+      _swap_opts=() \
+      _swap_luks_opts=()
+    _btrfs_opts=(
+      "${_image_path}"
+      "${_dir}"
+      "${_epoch}"
+      "${_size}"
+      "${_label}"
+      "${_compression}")
+    _erofs_opts=(
+      "${_image_path}"
+      "${_dir}"
+      "${_epoch}")
+    _ext4_opts=(
+      "${_dir}"
+      "${_image_path}"
+      "${_size}"
+      "${_epoch}"
+      "${_label}")
+    _fat_opts=(
+      "${_image_path}"
+      "${_size}"
+      "${_label}")
+    _squashfs_opts=( 
+      "${_dir}"
+      "${_image_path}")
+    _swap_opts=(
+      "${_image_path}"
+      "${_size}"
+      "${_epoch}"
+      "${_label}"
+    )
+    # shellcheck disable=SC1036
+    # shellcheck disable=SC1056
+    # shellcheck disable=SC1072
+    _erofs_luks_opts=(
+      "${_name}"
+      "${_dir}"
+      "${_image_path}"
+      "${_auto_size}"
+      "${_encryption_key}"
+      "${_epoch}"
+      "${_label}"
+      "${_grub}"
+    )
+    _ext4_luks_opts=(
+      "${_name}"
+      "${_dir}"
+      "${_image_path}"
+      "${_size}"
+      "${_encryption_key}"
+      "${_epoch}"
+      "${_label}"
+      "${_grub}")
+    _ext4_squashfs_opts=(
+      "${_name}"
+      "${_dir}"
+      "${_image_path}"
+      "${_size}"
+      "${_epoch}"
+      "${_label}"
+      "${_writable}")
+    _squashfs_luks_opts=(
+      "${_name}"
+      "${_dir}"
+      "${_image_path}"
+      "${_size}"
+      "${_encryption_key}"
+      "${_epoch}"
+      "${_label}"
+      "${_writable}"
+      "${_grub}")
+    _swap_luks=(
+      "${_name}"
+      "${_image_path}"
+      "${_size}"
+      "${_encryption_key}"
+      "${_epoch}"
+      "${_label}"
+      "${_grub}")
+    _ext4_squashfs_luks_opts=(
+      "${_name}"
+      "${_dir}"
+      "${_image_path}"
+      "${_size}"
+      "${_encryption_key}"
+      "${_epoch}"
+      "${_writable}"
+      "${_grub}")
+    echo "$(_get "$(echo "${fs_type}" | \
+                      sed "s/+/_/g")" \
+                 "opts")"
+}
+
+# Produces a file system image
+# $1: value in 'fs_images'
+_mkimg() {
+    local _image="${1}" \
+          _image_type \
+          _mkimg_opts=()
+    rm -f -- "${_image_path}"
+    _image_type="$(_get "${_image_type}" \
+                        "image_type")"
+    _mkimg_opts=("$(_get_mkimg_opts "${_image_type}")")
+    "_mkimg_${_image_type}" "${_mkimg_opts[@]}"
+}
+
 
 _get_conf_path() {
   local \
