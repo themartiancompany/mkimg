@@ -24,11 +24,335 @@ _global_variables() {
 _requirements() {
   _check_cmd \
     "cryptsetup"
-  _check_cmd \
-    "mdadm"
+#  _check_cmd \
+#    "mdadm"
   _check_cmd \
     "mke2fs"
 }
+########################################################
+# File system making functions
+########################################################
+
+## Utility functions
+
+# Returns epoch given a file system image name 
+# $1: value in fs_images
+_get_epoch() {
+    local _name="${1}"
+    echo $((SOURCE_DATE_EPOCH + "${_name}_const"))
+}
+
+# Returns an unique uuid given a datetime in UNIX time
+# $1: UNIX time
+_get_epoch_fsuuid() {
+    local _epoch="${1}"
+    uuidgen --sha1 \
+	        --namespace "${epoch_namespace}" \
+            --name "${_epoch}"
+}
+
+# Gets an ext4-compatible uuid from a date
+# $1: datetime in UNIX time
+_epoch_to_uuid() {
+    local _epoch="${1}"
+    local _uuid
+    TZ=UTC printf -v _uuid '%(%F-%H-%M-%S-00)T' "${_epoch}"
+    echo "${_uuid}"
+}
+
+_get_size() {
+    local _dir="${1}"
+    echo $(du -s "${_dir}" | \
+             cut -f 1)
+}
+
+## EROFS
+
+# Creates an EROFS image given a directory.
+# $1: resulting image
+# $2: input directory
+# $3: UNIX time (to generate a date-based uuid)
+_run_mkbtrfs() {
+    local _image_path="${1}"
+          _size="${2}" \
+          _dir="${3}" \
+          _epoch="${4}" \
+          _label="${5}" \
+          fsuuid
+    fsuuid="$(_get_epoch_fsuuid "${_epoch}")"
+    [[ "${_size}" == "" ]] && \
+      echo "autosize"
+    [[ ! "${quiet}" == "y" ]] || \
+      mkfs_btrfs_options+=('--quiet')
+    _msg_info "Creating BTRFS image"
+    _msg_info "Directory: ${_dir}"
+    _msg_info "Size: ${_size}"
+    _msg_info "Image path: ${_image_path}"
+    _msg_info "UUID: ${fsuuid}"
+    _msg_info "this may take a while..."
+    mkfs_btrfs_options+=(
+      '-L' "${_label}"
+      '-U' "${fsuuid}"
+      "${_mkfs_options[@]}")
+    mkfs.erofs "${mkfs_erofs_options[@]}" -- \
+               "${_image_path}" \
+               "${_dir}"
+    _msg_info "Done!"
+}
+
+## EROFS
+
+# Creates an EROFS image given a directory.
+# $1: resulting image
+# $2: input directory
+# $3: UNIX time (to generate a date-based uuid)
+_run_mkerofs() {
+    local _image_path="${1}"
+    local _dir="${2}"
+    local _epoch="${3}"
+    local fsuuid
+    fsuuid="$(_get_epoch_fsuuid "${_epoch}")"
+    [[ ! "${quiet}" == "y" ]] || \
+      mkfs_erofs_options+=('--quiet')
+    _msg_info "Creating EROFS image"
+    _msg_info "        Directory: ${_dir}"
+    _msg_info "       Image path: ${_image_path}"
+    _msg_info "            Label: ${_label}"
+    _msg_info "             UUID: ${fsuuid}"
+    _msg_info "this may take a while..."
+    mkfs_erofs_options+=(
+      '-U' "${fsuuid}"
+      "${_mkfs_options[@]}")
+    mkfs.erofs "${mkfs_erofs_options[@]}" -- \
+               "${_image_path}" \
+               "${_dir}"
+    _msg_info "Done!"
+}
+
+## EXT4
+
+# Creates an ext4 image of given size 
+# from a directory with the same name in the same path.
+# $1: directory to put into the image
+# $2: size of the resulting image
+# $3: UNIX time (to generate a date-based uuid)
+# $4: partition label
+# $5: if true the file system image will be writable
+_run_mkext4() {
+    local _dir="${1}"
+    local _image_path="${1}.img"
+    local _size="${2}" \
+          _epoch="${3}" \
+          _label="${4}" \
+          _writable="${5}" \
+          _fsuuid \
+          ext4_hash_seed \
+          mkfs_ext4_options=()
+    _fsuuid="$(_epoch_to_uuid "${_epoch}")"
+
+    _msg_info "Creating ext4 image"
+    _msg_info "Size: ${_size} KB"
+    _msg_info "Directory: ${_dir}"
+    _msg_info "Image path: ${_image_path}"
+    _msg_info "UUID: ${_fsuuid}"
+    _msg_info "Label: ${_label}"
+    _msg_info "this may take a while..."
+
+    ext4_hash_seed="$(uuidgen --sha1 \
+                              --namespace ${epoch_namespace} \
+                              --name "${_epoch} ext4 hash seed")"
+    _ext_opts=(
+      "lazy_itable_init=0"
+      "root_owner=0:0"
+      "hash_seed=${ext4_hash_seed}")
+    mkfs_ext4_options=(
+      '-d' "${_dir}"
+      '-O' '^has_journal,^resize_inode'
+      '-E' "$(IFS=, ; echo ${_ext_opts[*]})"
+      '-m' '0'
+      '-F'
+      '-b' 4096
+      '-U' 'clear')
+    [[ "${_label}" != "" ]] && \
+      mkfs_ext4_options+=('-L' "${_label}")
+    [[ ! "${quiet}" == "y" ]] || \
+      mkfs_ext4_options+=('-q')
+    if [[ ! "${quiet}" == "y" ]]; then
+        E2FSPROGS_FAKE_TIME="${_epoch}" \
+          mkfs.ext4 "${mkfs_ext4_options[@]}" -- \
+                    "${_image_path}" \
+                    "${_size}K"
+    else
+        E2FSPROGS_FAKE_TIME="${_epoch}" \
+          mkfs.ext4 "${mkfs_ext4_options[@]}" -- \
+                    "${_image_path}" \
+                    "${_size}K" > /dev/null 2>&1
+    fi
+    tune2fs -c 0 \
+            -i 0 -- \
+            "${_image_path}" > /dev/null
+    if [ "${_writable}" != "true" ]; then
+        tunefs -O read-only \
+               "${_image_path}"
+    fi
+    _msg_info "Done!"
+}
+
+## FAT
+
+# Creates a FAT image 
+# $1: image path
+# $2: image size in bytes
+# $3: image label
+_run_mkfat() {
+    local _image_path="${1}" \
+          _size_bytes=${2} \
+          _label="${3}" \
+          _deps=() \
+          _mkfs_fat_options=() \
+          _fun \
+          _size_kib="0" \
+          _msg=()
+    _deps=(
+      'function ceil(x){return int(x)+(x>int(x))}'
+      'function byte_to_kib(x){return x/1024}'
+      'function mib_to_kib(x){return x*1024}')
+    _fun='mib_to_kib(ceil((byte_to_kib($1)+1024)/1024))'
+    (( _size_bytes < 2*1024*1024 )) && \
+      _msg=("Image size is ${_size_bytes} bytes,"
+            "less than 2 MiB! Bumping up to 2 MiB") \
+      _msg_info "${_msg[*]}" && \
+      _size_bytes=$((20*1024*1024))
+    # Where it spills?
+    _size_bytes=$((_size_bytes * 10))
+    # Convert from bytes to KiB and round up to the next full MiB
+    # with an additional MiB for reserved sectors.
+    _size_kib="$(awk "${_deps[*]} END {print ${_fun}}" <<< \
+                   "${_size_bytes}")"
+    # The FAT image must be created with mkfs.fat, not mformat,
+    # as some systems have issues with mformat made images:
+    # https://lists.gnu.org/archive/html/grub-devel/2019-04/msg00099.html
+    _mkfs_fat_options=(
+      -C
+      -n "${_label}")
+    _msg_info "Creating FAT image of size: ${_size_kib} KiB..."
+    if [[ "${quiet}" == "y" ]]; then
+        # mkfs.fat does not have a -q/--quiet option, so
+        # redirect stdout to /dev/null instead
+        # https://github.com/dosfstools/dosfstools/issues/103
+        mkfs.fat "${_mkfs_fat_options[@]}" \
+                 "${_image_path}" \
+                 "${_size_kib}" > /dev/null
+    else
+        mkfs.fat "${_mkfs_fat_options[@]}" \
+                 "${_image_path}" \
+                 "${_size_kib}"
+    fi
+}
+
+## LUKS
+
+# Prompts a passphrase to be used as key for a partition
+# $1: partition name
+# $2: partition label
+_ask_passwd() {
+    local _name="${1}" \
+          _label="${2}" \
+          _prompt=() \
+          _prompt_cmd \
+          _mismatch \
+          _mismatch_cmd="echo" \
+          _opts=("--timeout=69042")
+    local _msg=("Insert new passphrase"
+                "for ${_name} (${_label}): ") \
+          _confirm_msg="Confirm: " \
+          _mismatch_opts=() \
+          _mismatch_msg="Passwords mismatch." \
+          _confirm
+    if \
+      command \
+        -v \
+          zenity &> /dev/null && \
+      [ -n "${DISPLAY}" ]; then
+      _prompt_cmd="$( \
+          command \
+            -v \
+            zenity)"
+      _mismatch_cmd="${_prompt_cmd}"
+      _opts+=(
+        "--password"
+      )
+      _mismatch_opts+=(
+        "--info"
+        "--icon" "dialog-password"
+        "--text"
+      )
+    elif (
+      command \
+        -v \
+        systemd-ask-password &> /dev/null); then
+      _prompt_cmd=$( \
+        command \
+          -v \
+          systemd-ask-password)
+    fi
+    _prompt=(
+      "${_prompt_cmd}"
+        "${_opts[@]}"
+    )
+    _mismatch=(
+      "${_mismatch_cmd}"
+        "${_mismatch_opts[@]}"
+        "${_mismatch_msg}"
+    )
+    while true; do
+      _passphrase=$( \
+        "${_prompt[@]}" \
+          "${_msg[*]}")
+        echo \
+          "${_confirm_msg}"
+        _confirm=$( \
+          "${_prompt[@]}" \
+          "${_confirm_msg}")
+        [[ "${_passphrase}" == "${_confirm}" ]] && \
+          break
+        "${_mismatch[@]}"
+    done
+}
+
+# Determines correct fallocate options for an image at a chosen path
+# $1: path of the fallocate resulting image to verify options for
+_validate_fallocate_opts() {
+    local _image_path="${1}"
+    local _posix_error=("fallocate:"
+                        "fallocate failed:"
+                        "Operation not supported")
+    local _msg
+    _msg="$(fallocate -l "100K" \
+                      "${_image_path}.test" 2>&1)" 
+    if [ "${_msg}" == "${_posix_error[*]}" ]; then
+        rm "${_image_path}.test"
+        echo '--posix' 
+    elif [ "${_msg}" != "" ]; then
+        _msg_error "${_msg}" 1
+    fi
+}
+
+# Closes a LUKS device mapper
+# $1: device mapper to close
+_close_luks_device() {
+    local _device="${1}"
+    local _mapper
+    _mapper=$(basename "${_device}")
+    blockdev --flushbufs \
+             "${_device}" > /dev/null 2>&1 || true
+    cryptsetup luksClose "${_mapper}" > /dev/null 2>&1 || true
+    if [ -e "${_device}" ]; then
+        dmsetup remove "${_device}" > /dev/null 2>&1 || true
+    fi
+    sync
+}
+
 
 _get_conf_path() {
   local \
