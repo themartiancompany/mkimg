@@ -21,6 +21,7 @@ _global_variables() {
   img_name=""
   img_label=""
   img_epoch=""
+  encryption_key=""
   color=""
   quiet=""
 }
@@ -43,32 +44,59 @@ _requirements() {
 # Returns epoch given a file system image name 
 # $1: value in fs_images
 _get_epoch() {
-    local _name="${1}"
-    echo $((SOURCE_DATE_EPOCH + "${_name}_const"))
+  local \
+    _name="${1}"
+    echo \
+      $(( \
+        SOURCE_DATE_EPOCH + \
+        "${_name}_const" ))
 }
 
-# Returns an unique uuid given a datetime in UNIX time
+# Returns an unique uuid
+# given a datetime in UNIX time
 # $1: UNIX time
 _get_epoch_fsuuid() {
-    local _epoch="${1}"
-    uuidgen --sha1 \
-	        --namespace "${epoch_namespace}" \
-            --name "${_epoch}"
+  local \
+    _epoch="${1}" \
+    _uuidgen_opts=()
+  _uuidgen_opts=(
+    --sha1
+    --namespace
+      "${epoch_namespace}"
+    --name
+      "${_epoch}"
+  )
+  uuidgen \
+    "${_uuidgen_opts[@]}"
 }
 
 # Gets an ext4-compatible uuid from a date
 # $1: datetime in UNIX time
 _epoch_to_uuid() {
-    local _epoch="${1}"
-    local _uuid
-    TZ=UTC printf -v _uuid '%(%F-%H-%M-%S-00)T' "${_epoch}"
-    echo "${_uuid}"
+    local \
+      _epoch="${1}" \
+      _uuid
+    TZ=UTC \
+    printf \
+      -v \
+        _uuid \
+      '%(%F-%H-%M-%S-00)T' \
+      "${_epoch}"
+    echo \
+      "${_uuid}"
 }
 
 _get_size() {
-    local _dir="${1}"
-    echo $(du -s "${_dir}" | \
-             cut -f 1)
+    local \
+      _dir="${1}"
+    echo \
+      $( \
+        du \
+          -s \
+          "${_dir}" | \
+          cut \
+            -f \
+              1)
 }
 
 ## EROFS
@@ -1049,6 +1077,13 @@ _get_mkimg_opts() {
       _squashfs_luks_opts=() \
       _swap_opts=() \
       _swap_luks_opts=()
+    _dir="${input_dir}"
+    _epoch="${input_dir}"
+    _size="${img_size}"
+    _label="${img_label}"
+    _name="${img_name}"
+    _compression="${img_compression}"
+    _writable="${img_writable}"
     _btrfs_opts=(
       "${_image_path}"
       "${_dir}"
@@ -1086,8 +1121,8 @@ _get_mkimg_opts() {
       "${_name}"
       "${_dir}"
       "${_image_path}"
-      "${_auto_size}"
-      "${_encryption_key}"
+      "${auto_size}"
+      "${encryption_key}"
       "${_epoch}"
       "${_label}"
       "${_grub}"
@@ -1097,7 +1132,7 @@ _get_mkimg_opts() {
       "${_dir}"
       "${_image_path}"
       "${_size}"
-      "${_encryption_key}"
+      "${encryption_key}"
       "${_epoch}"
       "${_label}"
       "${_grub}")
@@ -1114,7 +1149,7 @@ _get_mkimg_opts() {
       "${_dir}"
       "${_image_path}"
       "${_size}"
-      "${_encryption_key}"
+      "${encryption_key}"
       "${_epoch}"
       "${_label}"
       "${_writable}"
@@ -1123,7 +1158,7 @@ _get_mkimg_opts() {
       "${_name}"
       "${_image_path}"
       "${_size}"
-      "${_encryption_key}"
+      "${encryption_key}"
       "${_epoch}"
       "${_label}"
       "${_grub}")
@@ -1132,7 +1167,7 @@ _get_mkimg_opts() {
       "${_dir}"
       "${_image_path}"
       "${_size}"
-      "${_encryption_key}"
+      "${encryption_key}"
       "${_epoch}"
       "${_writable}"
       "${_grub}")
@@ -1218,8 +1253,8 @@ usage:
                           Default: $(_get "img" "tuple")
      -d <directory>       Specify input directory
      -s <size>            Specify a size fon the image
-     -r                   Specify whether the image is intended to be 'read only'
-     -g                   Specify whether the image is intended to be able to be loaded by GRUB
+     -w                   Specify whether the image is intended to be writable
+     -g                   Specify whether the image is intended to be able to be opened by GRUB
      -h                   This message.
      -c                   Enable color output
      -v                   Enable verbose output
@@ -1268,6 +1303,8 @@ _show_config() {
   _msg_info "       Image format tuple:   $(_get "img" "tuple")"
   _msg_info "               Image size:   $(_get "img" "size")"
   _msg_info "              Image label:   $(_get "img" "label")"
+  _msg_info "               Image name:   $(_get "img" "name")"
+  _msg_info "                 Writable:   $(_get "img" "writable")"
   _msg_info "          Input directory:   $(_get "input" "directory")"
 }
 
@@ -1281,13 +1318,16 @@ _config_user_init \
 # shellcheck disable=SC2034
 while \
   getopts \
-    'f:d:s:cvh?' \
+    'f:d:s:n:l:wcvh?' \
     arg; do
   case \
     "${arg}" in
     f) override_img_tuple="${OPTARG}" ;;
     d) override_input_directory="${OPTARG}" ;;
     s) override_img_size="${OPTARG}" ;;
+    n) override_img_name="${OPTARG}" ;;
+    l) override_img_label="${OPTARG}" ;;
+    w) override_img_writable="true" ;;
     c) override_color="y" ;;
     v) override_quiet="n" ;;
     h|?) _set_overrides && \
