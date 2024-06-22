@@ -1150,6 +1150,7 @@ _get_mkimg_opts() {
   local \
     fs_type="${1}" \
     _btrfs_opts=() \
+    _btrfs_luks_opts=() \
     _erofs_opts=() \
     _erofs_luks_opts=() \
     _ext4_opts=() \
@@ -1159,7 +1160,8 @@ _get_mkimg_opts() {
     _squashfs_opts=() \
     _squashfs_luks_opts=() \
     _swap_opts=() \
-    _swap_luks_opts=()
+    _swap_luks_opts=() \
+    _compression
   _dir="${input_directory}"
   _epoch="${img_epoch}"
   _size="${img_size}"
@@ -1197,6 +1199,18 @@ _get_mkimg_opts() {
     "${_epoch}"
     "${_label}"
   )
+  _btrfs_luks_opts=(
+    "${_name}"
+    "${_dir}"
+    "${_image_path}"
+    "${_size}"
+    "${encryption_key}"
+    "${_epoch}"
+    "${_label}"
+    "${grub_support}"
+    "${img_compression}"
+  )
+
   # shellcheck disable=SC1036
   # shellcheck disable=SC1056
   # shellcheck disable=SC1072
@@ -1268,35 +1282,52 @@ _get_mkimg_opts() {
 
 # BTRFS
 _validate_requirements_image_type_btrfs() {
-    _check_missing_cmd "mkfs.btrfs" "btrfs-progs"
+  _check_cmd \
+    "mkfs.btrfs" \
+    "btrfs-progs"
 }
 
 
 # EROFS
 _validate_requirements_image_type_erofs() {
-    _check_missing_cmd "mkfs.erofs" "erofs-utils"
+  _check_cmd \
+    "mkfs.erofs" \
+    "erofs-utils"
 }
 
 # EXT4
 _validate_requirements_image_type_ext4() {
-    _check_missing_cmd "mkfs.ext4" "e2fsprogs"
-    _check_missing_cmd "tune2fs" "e2fsprogs"
+  _check_cmd \
+    "mkfs.ext4" \
+    "e2fsprogs"
+  _check_cmd \
+    "tune2fs" \
+    "e2fsprogs"
 }
 
 # FAT
 _validate_requirements_image_type_fat() {
-    _check_missing_cmd "mkfs.fat" "dosfstools"
-    _check_missing_cmd "mmd" "mtools"
+  _check_cmd \
+    "mkfs.fat" \
+    "dosfstools"
+  _check_cmd \
+    "mmd" \
+    "mtools"
 }
 
 # LUKS
 _validate_requirements_image_type_luks() {
-    _check_missing_cmd "cryptsetup"
+  # TODO: Switch to mkluks
+  _check_cmd \
+    "cryptsetup"
+    "luks-tools"
 }
 
 # SQUASHFS
 _validate_requirements_image_type_squashfs() {
-    _check_missing_cmd "mksquashfs" "squashfs-tools"
+  _check_cmd \
+    "mksquashfs" \
+    "squashfs-tools"
 }
 
 _img_tuple_auto_detect() {
@@ -1341,6 +1372,7 @@ _mkimg() {
     "$( \
       _get_mkimg_opts \
         "${_type}")")
+  "_validate_requirements_image_type_${_type}"
   "_mkimg_${_type}" \
     "${_mkimg_opts[@]}"
 }
@@ -1378,6 +1410,22 @@ _set_overrides() {
     "img" \
     "name" \
     "image"
+  _set_override \
+    "img" \
+    "label" \
+    "label"
+  _set_override \
+    "img" \
+    "writable" \
+    "true"
+  _set_override \
+    "grub" \
+    "support" \
+    "true"
+  _set_override \
+    "input" \
+    "directory" \
+    ""
   if [[ -v override_quiet ]]; then
     quiet="${override_quiet}"
   elif [[ -z "${quiet}" ]]; then
