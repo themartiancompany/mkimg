@@ -1287,7 +1287,6 @@ _validate_requirements_image_type_btrfs() {
     "btrfs-progs"
 }
 
-
 # EROFS
 _validate_requirements_image_type_erofs() {
   _check_cmd \
@@ -1317,10 +1316,20 @@ _validate_requirements_image_type_fat() {
 
 # LUKS
 _validate_requirements_image_type_luks() {
+  local \
+    _key
   # TODO: Switch to mkluks
   _check_cmd \
-    "cryptsetup"
+    "cryptsetup" \
     "luks-tools"
+  _key="$( \
+    _get \
+      "encryption" \
+      "key")"
+  [[ -n "${_key}" ]] && \
+    _resolve_fs_encryption_key \
+      "key" \
+      "auto"
 }
 
 # SQUASHFS
@@ -1328,6 +1337,35 @@ _validate_requirements_image_type_squashfs() {
   _check_cmd \
     "mksquashfs" \
     "squashfs-tools"
+}
+
+## 2-layered image types
+
+# EROFS over LUKS
+_validate_requirements_image_type_erofs+luks() {
+    _validate_requirements_image_type_luks
+    _validate_requirements_image_type_erofs
+}
+
+# EXT4 over SQUASHFS airootfs
+_validate_requirements_image_type_ext4+squashfs() {
+    _validate_requirements_image_type_ext4
+    _validate_requirements_image_type_squashfs
+}
+
+# SQUASHFS over LUKS airootfs
+_validate_requirements_image_type_squashfs+luks() {
+    _validate_requirements_airootfs_image_type_luks
+    _validate_requirements_airootfs_image_type_squashfs
+}
+
+## 3-layered image types
+
+# EXT4 over SQUASHFS over LUKS
+_validate_requirements_image_type_ext4+squashfs+luks() {
+    _validate_requirements_image_type_luks
+    _validate_requirements_image_type_squashfs
+    _validate_requirements_image_type_ext4
 }
 
 _img_tuple_auto_detect() {
