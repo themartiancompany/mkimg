@@ -1326,14 +1326,15 @@ _validate_requirements_image_type_luks() {
   _check_cmd \
     "cryptsetup" \
     "luks-tools"
-  _key="$( \
-    _get \
-      "encryption" \
-      "key")"
-  [[ -n "${_key}" ]] && \
-    _resolve_key_auto \
-      "key" \
-      "auto"
+  # TODO: this part is probably inside mkluks
+  # _key="$( \
+  #   _get \
+  #     "encryption" \
+  #     "key")"
+  # [[ -n "${_key}" ]] && \
+  #   _resolve_key_auto \
+  #     "key" \
+  #     "auto"
 }
 
 # SQUASHFS
