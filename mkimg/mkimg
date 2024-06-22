@@ -1392,7 +1392,7 @@ _img_tuple_auto_detect() {
   # mdadm is still unbuilt on Android
   if \
     [[ "${_os}" == "Android" ]]; then
-    _tuple="btrfs+luks"
+    _tuple="ext4+luks"
   fi
   echo \
     "${_tuple}"
