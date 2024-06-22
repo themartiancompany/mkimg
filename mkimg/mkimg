@@ -25,6 +25,7 @@ _global_variables() {
   img_writable=""
   img_compression=""
   auto_size=""
+  key_auto=""
   encryption_key=""
   grub_support=""
   color=""
@@ -1330,7 +1331,7 @@ _validate_requirements_image_type_luks() {
       "encryption" \
       "key")"
   [[ -n "${_key}" ]] && \
-    _resolve_fs_encryption_key \
+    _resolve_key_auto \
       "key" \
       "auto"
 }
