@@ -23,6 +23,8 @@ _global_variables() {
   img_label=""
   img_epoch=""
   img_writable=""
+  img_compression=""
+  auto_size=""
   encryption_key=""
   grub_support=""
   color=""
@@ -619,27 +621,33 @@ _get_internal_size() {
 # $4: UNIX time (for a date-based uuid)
 # $5: partition label
 _mkimg_btrfs() {
-    local _dir="${1}"
-    local _image_path="${2}"
-    local _size="${3}"
-    local _epoch="${4}"
-    local _label="${5}"
-    local _writable="true"
-    if [[ "${_size}" == "" ]]; then
-	_msg_info "Pre-running mkerofs to determine LUKS partition size"
-        _run_mkbtrfs "${_tmp_img}" \
-                     "${_dir}" \
-                     "${_epoch}"
-        _tmp_size=$(_get_size "${_tmp_img}")
-        _size=$(( 69420 + _tmp_size * 12 / 10))
-    fi
-    _run_mkbtrfs "${_dir}" \
-                 "$(_get_internal_size "${_size}")" \
-                 "${_epoch}" \
-                 "${_label}" \
-                 "${_writable}"
-    sync
-    _msg_info "Done!"
+  local \
+    _dir="${1}" \
+    _image_path="${2}" \
+    _size="${3}" \
+    _epoch="${4}" \
+    _label="${5}" \
+    _writable="${6}" \
+    _compression="${7}"
+  # mmm
+  if [[ "${_size}" == "" ]]; then
+    _msg_info \
+      "Pre-running btrfs to determine LUKS partition size"
+    _run_mkbtrfs \
+      "${_tmp_img}" \
+      "${_dir}" \
+      "${_epoch}"
+    _tmp_size=$(_get_size "${_tmp_img}")
+    _size=$(( 69420 + _tmp_size * 12 / 10))
+  fi
+  _run_mkbtrfs \
+    "${_dir}" \
+    "$(_get_internal_size "${_size}")" \
+    "${_epoch}" \
+    "${_label}" \
+    "${_writable}"
+  sync
+  _msg_info "Done!"
 }
 
 
@@ -872,7 +880,7 @@ _mkimg_ext4+luks() {
 # $1: RAID name
 # $2: files to be put onto the RAID
 # $@: devices, in the following format <todo>
-_mkimg_raid1+ext4() {
+_mkimg_ext4+raid1() {
   local _name="${1}"
   local _dir="${2}"
   shift 2
@@ -907,6 +915,62 @@ _mkimg_ext4+squashfs() {
     _msg_info "Done!"
     rm -- "${_dir}.img"
 }
+
+## BTRFS over LUKS (encrypted image type)
+
+# Creates a btrfs file system inside a LUKS container image file.
+# $1: device mapper name
+# $2: directory to be put onto the image
+# $3: image path
+# $4: image size
+# $5: encryption key
+# $6: UNIX time (for a date-based uuid)
+# $7: partion label
+# $8: if true, the dm-verity will be disabled to let GRUB open it
+_mkimg_btrfs+luks() {
+    local \
+      _name="${1}" \
+      _dir="${2}" \
+      _image_path="${3}" \
+      _size="${4}" \
+      _encryption_key="${5}" \
+      _epoch="${6}" \
+      _label="${7}" \
+      _grub="${8}" \
+      _writable="${9}" \
+      _compression="${10}"
+    _mkluks_common \
+      "${_name}" \
+      "${_encryption_key}" \
+      "${_label}"
+    _run_mkluks \
+      "${_image_path}" \
+      "${_size}" \
+      "${_encryption_key}" \
+      "${_epoch}" \
+      "${_label}" \
+      "${_writable}" \
+      "${_grub}"
+    _run_btrfs \
+      "${_dir}" \
+      "$(_get_internal_size "${_size}")" \
+      "${_epoch}" \
+      "${_name}" \
+      "${_writable}" \
+      "${_compression}"
+    dd \
+      if="${_dir}.img" \
+      of="${image_device}" > \
+      /dev/null 2>&1
+    sync
+    _close_luks_device \
+      "${image_device}"
+    _msg_info \
+      "Done!"
+    rm -- \
+      "${_dir}.img"
+}
+
 
 # SQUASHFS over LUKS (encrypted compressed
 #                     read-only image type)
@@ -1083,118 +1147,121 @@ _mkimg_ext4+squashfs+luks() {
 # Get opts for a mkimg<fs_type> function
 # $1: file system composed type (ie. ext4+squashfs+luks)
 _get_mkimg_opts() {
-    local \
-      fs_type="${1}"
-      _btrfs_opts=() \
-      _erofs_opts=() \
-      _erofs_luks_opts=() \
-      _ext4_opts=() \
-      _ext4_luks_opts=() \
-      _ext4_squashfs_luks_opts=() \
-      _fat_opts=() \
-      _squashfs_opts=() \
-      _squashfs_luks_opts=() \
-      _swap_opts=() \
-      _swap_luks_opts=()
-    _dir="${input_directory}"
-    _epoch="${input_dir}"
-    _size="${img_size}"
-    _label="${img_label}"
-    _name="${img_name}"
-    _compression="${img_compression}"
-    _writable="${img_writable}"
-    _btrfs_opts=(
-      "${_image_path}"
-      "${_dir}"
-      "${_epoch}"
-      "${_size}"
-      "${_label}"
-      "${_compression}")
-    _erofs_opts=(
-      "${_image_path}"
-      "${_dir}"
-      "${_epoch}")
-    _ext4_opts=(
-      "${_dir}"
-      "${_image_path}"
-      "${_size}"
-      "${_epoch}"
-      "${_label}")
-    _fat_opts=(
-      "${_image_path}"
-      "${_size}"
-      "${_label}")
-    _squashfs_opts=( 
-      "${_dir}"
-      "${_image_path}")
-    _swap_opts=(
-      "${_image_path}"
-      "${_size}"
-      "${_epoch}"
-      "${_label}"
-    )
-    # shellcheck disable=SC1036
-    # shellcheck disable=SC1056
-    # shellcheck disable=SC1072
-    _erofs_luks_opts=(
-      "${_name}"
-      "${_dir}"
-      "${_image_path}"
-      "${auto_size}"
-      "${encryption_key}"
-      "${_epoch}"
-      "${_label}"
-      "${grub_support}"
-    )
-    _ext4_luks_opts=(
-      "${_name}"
-      "${_dir}"
-      "${_image_path}"
-      "${_size}"
-      "${encryption_key}"
-      "${_epoch}"
-      "${_label}"
-      "${grub_support}"
-    )
-    _ext4_squashfs_opts=(
-      "${_name}"
-      "${_dir}"
-      "${_image_path}"
-      "${_size}"
-      "${_epoch}"
-      "${_label}"
-      "${_writable}")
-    _squashfs_luks_opts=(
-      "${_name}"
-      "${_dir}"
-      "${_image_path}"
-      "${_size}"
-      "${encryption_key}"
-      "${_epoch}"
-      "${_label}"
-      "${_writable}"
-      "${grub_support}"
-    )
-    _swap_luks=(
-      "${_name}"
-      "${_image_path}"
-      "${_size}"
-      "${encryption_key}"
-      "${_epoch}"
-      "${_label}"
-      "${grub_support}")
-    _ext4_squashfs_luks_opts=(
-      "${_name}"
-      "${_dir}"
-      "${_image_path}"
-      "${_size}"
-      "${encryption_key}"
-      "${_epoch}"
-      "${_writable}"
-      "${grub_support}")
-    echo "$(_get "$(echo "${fs_type}" | \
-                      sed "s/+/_/g")" \
-                 "opts")"
+  local \
+    fs_type="${1}" \
+    _btrfs_opts=() \
+    _erofs_opts=() \
+    _erofs_luks_opts=() \
+    _ext4_opts=() \
+    _ext4_luks_opts=() \
+    _ext4_squashfs_luks_opts=() \
+    _fat_opts=() \
+    _squashfs_opts=() \
+    _squashfs_luks_opts=() \
+    _swap_opts=() \
+    _swap_luks_opts=()
+  _dir="${input_directory}"
+  _epoch="${img_epoch}"
+  _size="${img_size}"
+  _label="${img_label}"
+  _name="${img_name}"
+  _compression="${img_compression}"
+  _writable="${img_writable}"
+  _btrfs_opts=(
+    "${_image_path}"
+    "${_dir}"
+    "${_epoch}"
+    "${_size}"
+    "${_label}"
+    "${_compression}")
+  _erofs_opts=(
+    "${_image_path}"
+    "${_dir}"
+    "${_epoch}")
+  _ext4_opts=(
+    "${_dir}"
+    "${_image_path}"
+    "${_size}"
+    "${_epoch}"
+    "${_label}")
+  _fat_opts=(
+    "${_image_path}"
+    "${_size}"
+    "${_label}")
+  _squashfs_opts=( 
+    "${_dir}"
+    "${_image_path}")
+  _swap_opts=(
+    "${_image_path}"
+    "${_size}"
+    "${_epoch}"
+    "${_label}"
+  )
+  # shellcheck disable=SC1036
+  # shellcheck disable=SC1056
+  # shellcheck disable=SC1072
+  _erofs_luks_opts=(
+    "${_name}"
+    "${_dir}"
+    "${_image_path}"
+    "${auto_size}"
+    "${encryption_key}"
+    "${_epoch}"
+    "${_label}"
+    "${grub_support}"
+  )
+  _ext4_luks_opts=(
+    "${_name}"
+    "${_dir}"
+    "${_image_path}"
+    "${_size}"
+    "${encryption_key}"
+    "${_epoch}"
+    "${_label}"
+    "${grub_support}"
+  )
+  _ext4_squashfs_opts=(
+    "${_name}"
+    "${_dir}"
+    "${_image_path}"
+    "${_size}"
+    "${_epoch}"
+    "${_label}"
+    "${_writable}")
+  _squashfs_luks_opts=(
+    "${_name}"
+    "${_dir}"
+    "${_image_path}"
+    "${_size}"
+    "${encryption_key}"
+    "${_epoch}"
+    "${_label}"
+    "${_writable}"
+    "${grub_support}"
+  )
+  _swap_luks=(
+    "${_name}"
+    "${_image_path}"
+    "${_size}"
+    "${encryption_key}"
+    "${_epoch}"
+    "${_label}"
+    "${grub_support}")
+  _ext4_squashfs_luks_opts=(
+    "${_name}"
+    "${_dir}"
+    "${_image_path}"
+    "${_size}"
+    "${encryption_key}"
+    "${_epoch}"
+    "${_writable}"
+    "${grub_support}")
+  echo \
+    "$(_get \
+         "$(echo \
+              "${fs_type}" | \
+              sed "s/+/_/g")" \
+         "opts")"
 }
 
 ## File systems type support
@@ -1230,6 +1297,23 @@ _validate_requirements_image_type_luks() {
 # SQUASHFS
 _validate_requirements_image_type_squashfs() {
     _check_missing_cmd "mksquashfs" "squashfs-tools"
+}
+
+_img_tuple_auto_detect() {
+  local \
+    _tuple \
+    _os
+  _tuple="raid0+luks+btrfs"
+  _os="$( \
+    uname \
+      -o)"
+  # mdadm is still unbuilt on Android
+  if \
+    [[ "${_os}" == "Android" ]]; then
+    _tuple="luks+btrfs"
+  fi
+  echo \
+    "${_tuple}"
 }
 
 # Produces a file system image
@@ -1277,24 +1361,6 @@ _get_conf_path() {
     "${_conf}"
 }
 
-_img_tuple_auto_detect() {
-  local \
-    _tuple \
-    _os
-  _tuple="raid0+luks+btrfs"
-  _os="$( \
-    uname \
-      -o)"
-  # mdadm is still unbuilt on Android
-  if \
-    [[ "${_os}" == "Android" ]] && \
-    [[ "$(_get "img" "tuple")" == *"raid"* ]] ; then
-    _tuple="luks+btrfs"
-  fi
-  echo \
-    "${_tuple}"
-}
-
 _set_overrides() {
   _set_override \
     "creation" \
@@ -1306,8 +1372,12 @@ _set_overrides() {
     "auto"
   _set_override \
     "img" \
-    "tuple" \
-    "${_tuple}"
+    "size" \
+    "auto"
+  _set_override \
+    "img" \
+    "name" \
+    "image"
   if [[ -v override_quiet ]]; then
     quiet="${override_quiet}"
   elif [[ -z "${quiet}" ]]; then
