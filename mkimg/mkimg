@@ -24,10 +24,11 @@ _global_variables() {
   img_epoch=""
   img_writable=""
   img_compression=""
-  auto_size=""
+  size_auto=""
   key_auto=""
   encryption_key=""
   grub_support=""
+  validate_only=""
   color=""
   quiet=""
 }
@@ -1222,7 +1223,7 @@ _get_mkimg_opts() {
     "${_name}"
     "${_dir}"
     "${_image_path}"
-    "${auto_size}"
+    "${size_auto}"
     "${encryption_key}"
     "${_epoch}"
     "${_label}"
@@ -1346,6 +1347,13 @@ _validate_requirements_image_type_squashfs() {
 
 ## 2-layered image types
 
+# BTRFS over LUKS
+_validate_requirements_image_type_btrfs+luks() {
+    _validate_requirements_image_type_luks
+    _validate_requirements_image_type_btrfs
+}
+
+
 # EROFS over LUKS
 _validate_requirements_image_type_erofs+luks() {
     _validate_requirements_image_type_luks
@@ -1395,6 +1403,7 @@ _img_tuple_auto_detect() {
 _mkimg() {
   local \
     _type="${1}" \
+    _validate="${2}" \
     _imgs=() \
     _mkimg_opts=()
   _imgs=(
@@ -1416,6 +1425,9 @@ _mkimg() {
       _get_mkimg_opts \
         "${_type}")")
   "_validate_requirements_image_type_${_type}"
+  if [[ "${_validate}" == true ]]; then
+    return
+  fi
   "_mkimg_${_type}" \
     "${_mkimg_opts[@]}"
 }
@@ -1562,7 +1574,7 @@ _config_user_init \
 # shellcheck disable=SC2034
 while \
   getopts \
-    'f:d:s:n:l:wcvh?' \
+    'f:d:s:n:l:wtgcvh?' \
     arg; do
   case \
     "${arg}" in
@@ -1572,6 +1584,8 @@ while \
     n) override_img_name="${OPTARG}" ;;
     l) override_img_label="${OPTARG}" ;;
     w) override_img_writable="true" ;;
+    t) override_validate_only="false" ;;
+    g) override_grub_support="false" ;;
     c) override_color="y" ;;
     v) override_quiet="n" ;;
     h|?) _set_overrides && \
