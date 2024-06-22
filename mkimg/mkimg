@@ -53,10 +53,10 @@ _requirements() {
 _get_epoch() {
   local \
     _name="${1}"
-    echo \
-      $(( \
-        SOURCE_DATE_EPOCH + \
-        "${_name}_const" ))
+  echo \
+    $(( \
+      SOURCE_DATE_EPOCH + \
+      "${_name}_const" ))
 }
 
 # Returns an unique uuid
@@ -1277,7 +1277,7 @@ _get_mkimg_opts() {
     "${grub_support}")
   echo \
     "$(_get \
-         "$(echo \
+         "_$(echo \
               "${fs_type}" | \
               sed "s/+/_/g")" \
          "opts")"
@@ -1385,14 +1385,14 @@ _img_tuple_auto_detect() {
   local \
     _tuple \
     _os
-  _tuple="raid0+luks+btrfs"
+  _tuple="btrfs+luks+raid1"
   _os="$( \
     uname \
       -o)"
   # mdadm is still unbuilt on Android
   if \
     [[ "${_os}" == "Android" ]]; then
-    _tuple="luks+btrfs"
+    _tuple="btrfs+luks"
   fi
   echo \
     "${_tuple}"
