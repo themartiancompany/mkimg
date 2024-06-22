@@ -14,6 +14,7 @@ source \
 
 # shellcheck disable=SC2034
 _global_variables() {
+  creation_date=""
   out_files=()
   img_tuple=""
   input_directory=""
@@ -21,7 +22,9 @@ _global_variables() {
   img_name=""
   img_label=""
   img_epoch=""
+  img_writable=""
   encryption_key=""
+  grub_support=""
   color=""
   quiet=""
 }
@@ -174,7 +177,7 @@ _run_mkerofs() {
 _run_mkext4() {
     local \
       _dir="${1}" \
-      _image_path="${1}.img"
+      _image_path="${1}.img" \
       _size="${2}" \
       _epoch="${3}" \
       _label="${4}" \
@@ -720,10 +723,12 @@ _mkluks_common() {
 # $1: directory to create the squashfs image with
 # $2: resulting image path
 _mkimg_squashfs() {
-    local _dir="${1}"
-    local _image_path="${2}"
-    _run_mksquashfs "${_dir}" \
-                    "${_image_path}"
+  local \
+    _dir="${1}" \
+    _image_path="${2}"
+  _run_mksquashfs \
+    "${_dir}" \
+    "${_image_path}"
 }
 
 ## SWAP (on-disk virtual memory)
@@ -734,7 +739,8 @@ _mkimg_squashfs() {
 # $3: UNIX time (for a date-based uuid)
 # $4: partition label
 _mkimg_swap() {
-    _run_mkswap "${@}"
+  _run_mkswap \
+    "${@}"
 }
 
 ### 2-layered types
@@ -753,53 +759,66 @@ _mkimg_swap() {
 # $7: partition label
 # $8: if true, the dm-verity layer will be disabled so that the image can be opened from GRUB
 _mkimg_erofs+luks() {
-    local _name="${1}" \
-          _dir="${2}" \
-          _image_path="${3}" \
-          _size="${4}" \
-          _encryption_key="${5}" \
-          _epoch="${6}" \
-          _label="${7}" \
-          _grub="${8}" \
-          _writable="false" \
-          _tmp_img="$(_get "work" \
-                           "dir")/tmp.erofs" \
-          _tmp_size
-    if [[ "${_size}" == "" ]]; then
-	    _msg_info "Pre-running mkerofs to determine LUKS partition size"
-        _run_mkerofs "${_tmp_img}" \
-                     "${_dir}" \
-                     "${_epoch}"
-        _tmp_size=$(_get_size "${_tmp_img}")
-        _size=$(( 69420 + _tmp_size * 12 / 10))
-    fi
-    _mkluks_common "${_name}" \
-                   "${_encryption_key}" \
-                   "${_label}"
-    _run_mkluks "${_image_path}" \
-                "${_size}" \
-                "${_encryption_key}" \
-                "${_epoch}" \
-                "${_label}" \
-                "${_writable}" \
-                "${_grub}"
-    if [[ "${_tmp_size}" != "" ]]; then
-        _msg_info "Copying erofs image"
-	if [[ "${quiet}" == "y" ]]; then
-            dd if="${_tmp_img}" \
-               of="${image_device}" > /dev/null 2>&1
-	else
-            dd if="${_tmp_img}" \
-               of="${image_device}"
-	fi
+  local \
+    _name="${1}" \
+    _dir="${2}" \
+    _image_path="${3}" \
+    _size="${4}" \
+    _encryption_key="${5}" \
+    _epoch="${6}" \
+    _label="${7}" \
+    _grub="${8}" \
+    _writable="false" \
+    _tmp_img="" \
+    _tmp_size
+  _tmp_img="$( \
+    _get \
+      "work" \
+      "dir")/tmp.erofs"
+  if [[ "${_size}" == "" ]]; then
+    _msg_info \
+      "Pre-running mkerofs to determine LUKS partition size"
+    _run_mkerofs \
+      "${_tmp_img}" \
+      "${_dir}" \
+      "${_epoch}"
+    _tmp_size=$(_get_size "${_tmp_img}")
+    _size=$(( 69420 + _tmp_size * 12 / 10))
+  fi
+  _mkluks_common \
+    "${_name}" \
+    "${_encryption_key}" \
+    "${_label}"
+  _run_mkluks \
+    "${_image_path}" \
+    "${_size}" \
+    "${_encryption_key}" \
+    "${_epoch}" \
+    "${_label}" \
+    "${_writable}" \
+    "${_grub}"
+  if [[ "${_tmp_size}" != "" ]]; then
+    _msg_info "Copying erofs image"
+    if [[ "${quiet}" == "y" ]]; then
+      dd \
+        if="${_tmp_img}" \
+        of="${image_device}" > \
+        /dev/null 2>&1
     else
-	msg_info "Writing erofs image"
-        _run_mkerofs "${image_device}" \
-                     "${_dir}" \
-                     "${_epoch}"
-    fi 
-    sync
-    _close_luks_device "${image_device}"
+      dd \
+        if="${_tmp_img}" \
+        of="${image_device}"
+    fi
+  else
+    msg_info \
+      "Writing erofs image"
+    _run_mkerofs \
+      "${image_device}" \
+      "${_dir}" \
+      "${_epoch}"
+  fi 
+  sync
+  _close_luks_device "${image_device}"
 }
 
 ## EXT4 over LUKS (encrypted image type)
@@ -853,7 +872,7 @@ _mkimg_ext4+luks() {
 # $1: RAID name
 # $2: files to be put onto the RAID
 # $@: devices, in the following format <todo>
-_mkimg+ext4+raid1() {
+_mkimg_raid1+ext4() {
   local _name="${1}"
   local _dir="${2}"
   shift 2
@@ -1077,7 +1096,7 @@ _get_mkimg_opts() {
       _squashfs_luks_opts=() \
       _swap_opts=() \
       _swap_luks_opts=()
-    _dir="${input_dir}"
+    _dir="${input_directory}"
     _epoch="${input_dir}"
     _size="${img_size}"
     _label="${img_label}"
@@ -1125,7 +1144,7 @@ _get_mkimg_opts() {
       "${encryption_key}"
       "${_epoch}"
       "${_label}"
-      "${_grub}"
+      "${grub_support}"
     )
     _ext4_luks_opts=(
       "${_name}"
@@ -1135,7 +1154,8 @@ _get_mkimg_opts() {
       "${encryption_key}"
       "${_epoch}"
       "${_label}"
-      "${_grub}")
+      "${grub_support}"
+    )
     _ext4_squashfs_opts=(
       "${_name}"
       "${_dir}"
@@ -1153,7 +1173,8 @@ _get_mkimg_opts() {
       "${_epoch}"
       "${_label}"
       "${_writable}"
-      "${_grub}")
+      "${grub_support}"
+    )
     _swap_luks=(
       "${_name}"
       "${_image_path}"
@@ -1161,7 +1182,7 @@ _get_mkimg_opts() {
       "${encryption_key}"
       "${_epoch}"
       "${_label}"
-      "${_grub}")
+      "${grub_support}")
     _ext4_squashfs_luks_opts=(
       "${_name}"
       "${_dir}"
@@ -1170,10 +1191,45 @@ _get_mkimg_opts() {
       "${encryption_key}"
       "${_epoch}"
       "${_writable}"
-      "${_grub}")
+      "${grub_support}")
     echo "$(_get "$(echo "${fs_type}" | \
                       sed "s/+/_/g")" \
                  "opts")"
+}
+
+## File systems type support
+
+# BTRFS
+_validate_requirements_image_type_btrfs() {
+    _check_missing_cmd "mkfs.btrfs" "btrfs-progs"
+}
+
+
+# EROFS
+_validate_requirements_image_type_erofs() {
+    _check_missing_cmd "mkfs.erofs" "erofs-utils"
+}
+
+# EXT4
+_validate_requirements_image_type_ext4() {
+    _check_missing_cmd "mkfs.ext4" "e2fsprogs"
+    _check_missing_cmd "tune2fs" "e2fsprogs"
+}
+
+# FAT
+_validate_requirements_image_type_fat() {
+    _check_missing_cmd "mkfs.fat" "dosfstools"
+    _check_missing_cmd "mmd" "mtools"
+}
+
+# LUKS
+_validate_requirements_image_type_luks() {
+    _check_missing_cmd "cryptsetup"
+}
+
+# SQUASHFS
+_validate_requirements_image_type_squashfs() {
+    _check_missing_cmd "mksquashfs" "squashfs-tools"
 }
 
 # Produces a file system image
@@ -1186,16 +1242,23 @@ _mkimg() {
   _imgs=(
     "$@"
   )
-    rm \
-      -f -- \
-      "${_imgs[@]}"
-    _image_path="${_imgs}"
-    _mkimg_opts=(
-      "$( \
-        _get_mkimg_opts \
-          "${_type}")")
-    "_mkimg_${_type}" \
-      "${_mkimg_opts[@]}"
+  if [[ "${_type}" == "auto" ]]; then
+    _type="$( \
+      _img_tuple_auto_detect)"
+  fi
+  rm \
+    -f -- \
+    "${_imgs[@]}"
+  # Raid support will be added when
+  # a machine with support for it will be
+  # available
+  _image_path="${_imgs}"
+  _mkimg_opts=(
+    "$( \
+      _get_mkimg_opts \
+        "${_type}")")
+  "_mkimg_${_type}" \
+    "${_mkimg_opts[@]}"
 }
 
 _get_conf_path() {
@@ -1214,11 +1277,37 @@ _get_conf_path() {
     "${_conf}"
 }
 
+_img_tuple_auto_detect() {
+  local \
+    _tuple \
+    _os
+  _tuple="raid0+luks+btrfs"
+  _os="$( \
+    uname \
+      -o)"
+  # mdadm is still unbuilt on Android
+  if \
+    [[ "${_os}" == "Android" ]] && \
+    [[ "$(_get "img" "tuple")" == *"raid"* ]] ; then
+    _tuple="luks+btrfs"
+  fi
+  echo \
+    "${_tuple}"
+}
+
 _set_overrides() {
+  _set_override \
+    "creation" \
+    "date" \
+    "$(_get_date_human)"
   _set_override \
     "img" \
     "tuple" \
-    "raid0+luks+btrfs"
+    "auto"
+  _set_override \
+    "img" \
+    "tuple" \
+    "${_tuple}"
   if [[ -v override_quiet ]]; then
     quiet="${override_quiet}"
   elif [[ -z "${quiet}" ]]; then
@@ -1290,21 +1379,15 @@ _display_flags() {
 
 # Shows configuration options.
 _show_config() {
-  local \
-    _creation_date
-  TZ=UTC \
-    printf \
-      -v _creation_date \
-      '%(%FT%R%z)T' \
-      "${SOURCE_DATE_EPOCH}"
   _msg_info "$(_get "app" "name") configuration"
-  _msg_info "            Creation date:   $(_get "_creation" "date")"
+  _msg_info "            Creation date:   $(_get "creation" "date")"
   _msg_info "           Output file(s):   ${out_files[*]}"
   _msg_info "       Image format tuple:   $(_get "img" "tuple")"
   _msg_info "               Image size:   $(_get "img" "size")"
   _msg_info "              Image label:   $(_get "img" "label")"
   _msg_info "               Image name:   $(_get "img" "name")"
   _msg_info "                 Writable:   $(_get "img" "writable")"
+  _msg_info "             GRUB support:   $(_get "grub" "support")"
   _msg_info "          Input directory:   $(_get "input" "directory")"
 }
 
