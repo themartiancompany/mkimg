@@ -469,9 +469,12 @@ _run_mkluks() {
           "with cryptsetup (${_size}KB) ${_key_msg}")
     _msg_info "${_msg[*]}"
     _fallocate_opts+=(
-      "$(_validate_fallocate_opts "${_image_path}")")
-    fallocate "${_fallocate_opts[@]}" \
-              "${_image_path}"
+      "$( \
+        _validate_fallocate_opts \
+          "${_image_path}")")
+    fallocate \
+      "${_fallocate_opts[@]}" \
+      "${_image_path}"
     _format_cmd=(
       "cryptsetup" "-q"
                    "-y" "luksFormat" "${_format_opts[*]}"
@@ -1347,16 +1350,16 @@ _validate_requirements_image_type_erofs+luks() {
     _validate_requirements_image_type_erofs
 }
 
-# EXT4 over SQUASHFS airootfs
+# EXT4 over SQUASHFS
 _validate_requirements_image_type_ext4+squashfs() {
     _validate_requirements_image_type_ext4
     _validate_requirements_image_type_squashfs
 }
 
-# SQUASHFS over LUKS airootfs
+# SQUASHFS over LUKS
 _validate_requirements_image_type_squashfs+luks() {
-    _validate_requirements_airootfs_image_type_luks
-    _validate_requirements_airootfs_image_type_squashfs
+    _validate_requirements_image_type_luks
+    _validate_requirements_image_type_squashfs
 }
 
 ## 3-layered image types
