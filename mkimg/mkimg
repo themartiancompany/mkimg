@@ -14,6 +14,7 @@ source \
 
 # shellcheck disable=SC2034
 _global_variables() {
+  mkimg_opts=()
   creation_date=""
   out_files=()
   img_tuple=""
@@ -846,36 +847,46 @@ _mkimg_erofs+luks() {
 # $7: partion label
 # $8: if true, the dm-verity will be disabled to let GRUB open it
 _mkimg_ext4+luks() {
-    local _name="${1}" \
-          _dir="${2}" \
-          _image_path="${3}" \
-          _size="${4}" \
-          _encryption_key="${5}" \
-          _epoch="${6}" \
-          _label="${7}" \
-          _grub="${8}" \
-          _writable="true"
-    _mkluks_common "${_name}" \
-                   "${_encryption_key}" \
-                   "${_label}"
-    _run_mkluks "${_image_path}" \
-                "${_size}" \
-                "${_encryption_key}" \
-                "${_epoch}" \
-                "${_label}" \
-                "${_writable}" \
-                "${_grub}"
-    _run_mkext4 "${_dir}" \
-                "$(_get_internal_size "${_size}")" \
-                "${_epoch}" \
-                "${_name}" \
-                "${_writable}"
-    dd if="${_dir}.img" \
-       of="${image_device}" > /dev/null 2>&1
-    sync
-    _close_luks_device "${image_device}"
-    _msg_info "Done!"
-    rm -- "${_dir}.img"
+  local \
+    _name="${1}" \
+    _image_path="${2}" \
+    _size="${3}" \
+    _encryption_key="${4}" \
+    _epoch="${5}" \
+    _label="${6}" \
+    _grub="${7}" \
+    _writable="${8}" \
+    _dir="${9}"
+  # _mkluks_common \
+  #   "${_name}" \
+  #   "${_encryption_key}" \
+  #   "${_label}"
+  # _run_mkluks \
+  #   "${_image_path}" \
+  #   "${_size}" \
+  #   "${_encryption_key}" \
+  #   "${_epoch}" \
+  #   "${_label}" \
+  #   "${_writable}" \
+  #   "${_grub}"
+  # _run_mkext4 \
+  #   "${_dir}" \
+  #   "$(_get_internal_size \
+  #        "${_size}")" \
+  #   "${_epoch}" \
+  #   "${_name}" \
+  #   "${_writable}"
+  # dd \
+  #   if="${_dir}.img" \
+  #   of="${image_device}" > \
+  #   /dev/null 2>&1
+  # sync
+  # _close_luks_device \
+  #   "${image_device}"
+  # _msg_info \
+  #   "Done!"
+  # rm -- \
+  #   "${_dir}.img"
 }
 
 ## EXT4 over RAID (high-availability/high-performance
@@ -1215,7 +1226,6 @@ _get_mkimg_opts() {
     "${grub_support}"
     "${img_compression}"
   )
-
   # shellcheck disable=SC1036
   # shellcheck disable=SC1056
   # shellcheck disable=SC1072
@@ -1231,13 +1241,14 @@ _get_mkimg_opts() {
   )
   _ext4_luks_opts=(
     "${_name}"
-    "${_dir}"
     "${_image_path}"
     "${_size}"
     "${encryption_key}"
     "${_epoch}"
     "${_label}"
     "${grub_support}"
+    "${_writable}"
+    "${_dir}"
   )
   _ext4_squashfs_opts=(
     "${_name}"
@@ -1265,7 +1276,8 @@ _get_mkimg_opts() {
     "${encryption_key}"
     "${_epoch}"
     "${_label}"
-    "${grub_support}")
+    "${grub_support}"
+  )
   _ext4_squashfs_luks_opts=(
     "${_name}"
     "${_dir}"
@@ -1274,13 +1286,22 @@ _get_mkimg_opts() {
     "${encryption_key}"
     "${_epoch}"
     "${_writable}"
-    "${grub_support}")
-  echo \
-    "$(_get \
-         "_$(echo \
-              "${fs_type}" | \
-              sed "s/+/_/g")" \
-         "opts")"
+    "${grub_support}"
+  )
+  _msg_info \
+    "options for type '${fs_type}':"
+  _mkimg_opts=(
+    $(_get \
+        "_$( \
+          echo \
+            "${fs_type}" | \
+            sed \
+              "s/+/_/g")" \
+        "opts")
+  )
+  _msg_info \
+    "${_mkimg_opts[*]}"
+
 }
 
 ## File systems type support
@@ -1360,6 +1381,13 @@ _validate_requirements_image_type_erofs+luks() {
     _validate_requirements_image_type_erofs
 }
 
+# EXT4 over LUKS
+_validate_requirements_image_type_ext4+luks() {
+    _validate_requirements_image_type_luks
+    _validate_requirements_image_type_ext4
+}
+
+
 # EXT4 over SQUASHFS
 _validate_requirements_image_type_ext4+squashfs() {
     _validate_requirements_image_type_ext4
@@ -1412,6 +1440,8 @@ _mkimg() {
   if [[ "${_type}" == "auto" ]]; then
     _type="$( \
       _img_tuple_auto_detect)"
+    _msg_info \
+      "auto-selected image type '${_type}'"
   fi
   rm \
     -f -- \
@@ -1420,10 +1450,8 @@ _mkimg() {
   # a machine with support for it will be
   # available
   _image_path="${_imgs}"
-  _mkimg_opts=(
-    "$( \
-      _get_mkimg_opts \
-        "${_type}")")
+  _get_mkimg_opts \
+    "${_type}"
   "_validate_requirements_image_type_${_type}"
   if [[ "${_validate}" == true ]]; then
     return
@@ -1478,6 +1506,10 @@ _set_overrides() {
     "support" \
     "true"
   _set_override \
+    "validate" \
+    "only" \
+    "false"
+  _set_override \
     "input" \
     "directory" \
     ""
@@ -1515,8 +1547,15 @@ usage:
                           Default: $(_get "img" "tuple")
      -d <directory>       Specify input directory
      -s <size>            Specify a size fon the image
+     -l <img_label>       Image label
+                          Default: $(_get "img" "label")
+
      -w                   Specify whether the image is intended to be writable
      -g                   Specify whether the image is intended to be able to be opened by GRUB
+     -t                   Only verify requirements tobproducebthe image
+                          are satisfied.
+                          Default: $(_get "validate" "only")
+ 
      -h                   This message.
      -c                   Enable color output
      -v                   Enable verbose output
@@ -1559,8 +1598,10 @@ _show_config() {
   _msg_info "               Image size:   $(_get "img" "size")"
   _msg_info "              Image label:   $(_get "img" "label")"
   _msg_info "               Image name:   $(_get "img" "name")"
+  _msg_info "           Encryption key:   $(_get "encryption" "key")"
   _msg_info "                 Writable:   $(_get "img" "writable")"
   _msg_info "             GRUB support:   $(_get "grub" "support")"
+  _msg_info "            Validate only:   $(_get "validate" "only")"
   _msg_info "          Input directory:   $(_get "input" "directory")"
 }
 
@@ -1574,7 +1615,7 @@ _config_user_init \
 # shellcheck disable=SC2034
 while \
   getopts \
-    'f:d:s:n:l:wtgcvh?' \
+    'f:d:s:n:l:k:wtgcvh?' \
     arg; do
   case \
     "${arg}" in
@@ -1583,8 +1624,10 @@ while \
     s) override_img_size="${OPTARG}" ;;
     n) override_img_name="${OPTARG}" ;;
     l) override_img_label="${OPTARG}" ;;
+    k) override_encryption_key="${OPTARG}" ;;
     w) override_img_writable="true" ;;
-    t) override_validate_only="false" ;;
+    w) override_img_writable="true" ;;
+    t) override_validate_only="true" ;;
     g) override_grub_support="false" ;;
     c) override_color="y" ;;
     v) override_quiet="n" ;;
@@ -1604,7 +1647,9 @@ shift \
   $(( \
     OPTIND - 1 \
   ))
+_set_overrides
 (( $# < 1 )) && \
+[[ "${validate_only}" == false ]] && \
   _msg_error \
     "no output image(s) specified" \
     0 && \
@@ -1614,7 +1659,6 @@ shift \
 out_files=(
   "$@"
 )
-_set_overrides
 [[ "$(_get \
         "img" \
         "tuple")" == "" ]] && \
@@ -1623,12 +1667,17 @@ _set_overrides
     0 && \
   _usage \
     1
+mkimg_opts=(
+  "$(_get \
+       "img" \
+        "tuple")"
+  "$(_get \
+      "validate" \
+      "only")"
+  "${out_files[@]}"
+  )
 _show_config
 _mkimg \
-  "$( \
-    _get \
-      "img" \
-      "tuple")" \
-  "${out_files[@]}"
+  "${mkimg_opts[@]}"
 
 # vim:set sw=2 sts=-1 et:
