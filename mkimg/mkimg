@@ -26,7 +26,7 @@ _global_variables() {
   img_writable=""
   img_compression=""
   size_auto=""
-  key_auto=""
+  key_type=""
   encryption_key=""
   grub_support=""
   validate_only=""
@@ -1547,15 +1547,23 @@ usage:
                           Default: $(_get "img" "tuple")
      -d <directory>       Specify input directory
      -s <size>            Specify a size fon the image
+     -n <img_name>        LUKs container image name (if enabled)
+                          Default: $(_get "img" "name")
      -l <img_label>       Image label
                           Default: $(_get "img" "label")
-
+     -K <key_type>        LUKS container encryption key type
+                          ('auto', 'passphrase', 'file')
+                          Default: $(_get "key" "type")
+     -k <encryption_key>  LUKS container encryption key
+                          Default: $(_get "encryption" "key")
      -w                   Specify whether the image is intended to be writable
-     -g                   Specify whether the image is intended to be able to be opened by GRUB
-     -t                   Only verify requirements tobproducebthe image
+                          Default: $(_get "img" "writable")
+     -g                   Specify whether the image is intended to be able
+                          to be opened by GRUB
+                          Default: $(_get "grub" "support")
+     -t                   Only verify if requirements to produce the image
                           are satisfied.
                           Default: $(_get "validate" "only")
- 
      -h                   This message.
      -c                   Enable color output
      -v                   Enable verbose output
@@ -1598,6 +1606,7 @@ _show_config() {
   _msg_info "               Image size:   $(_get "img" "size")"
   _msg_info "              Image label:   $(_get "img" "label")"
   _msg_info "               Image name:   $(_get "img" "name")"
+  _msg_info "                 Key type:   $(_get "key" "type")"
   _msg_info "           Encryption key:   $(_get "encryption" "key")"
   _msg_info "                 Writable:   $(_get "img" "writable")"
   _msg_info "             GRUB support:   $(_get "grub" "support")"
@@ -1615,7 +1624,7 @@ _config_user_init \
 # shellcheck disable=SC2034
 while \
   getopts \
-    'f:d:s:n:l:k:wtgcvh?' \
+    'f:d:s:n:l:K:k:wtgcvh?' \
     arg; do
   case \
     "${arg}" in
@@ -1624,6 +1633,7 @@ while \
     s) override_img_size="${OPTARG}" ;;
     n) override_img_name="${OPTARG}" ;;
     l) override_img_label="${OPTARG}" ;;
+    K) override_key_type="${OPTARG}" ;;
     k) override_encryption_key="${OPTARG}" ;;
     w) override_img_writable="true" ;;
     w) override_img_writable="true" ;;
