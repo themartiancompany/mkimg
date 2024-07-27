@@ -851,12 +851,18 @@ _mkimg_ext4+luks() {
     _name="${1}" \
     _image_path="${2}" \
     _size="${3}" \
-    _encryption_key="${4}" \
-    _epoch="${5}" \
-    _label="${6}" \
-    _grub="${7}" \
-    _writable="${8}" \
-    _dir="${9}"
+    _epoch="${4}" \
+    _label="${5}" \
+    _grub="${6}" \
+    _writable="${7}" \
+    _dir \
+    _encryption_key
+  if (( $# >= 8 )); then
+    _dir="${8}"
+  fi
+  if (( $# >= 8 )); then
+    _encryption_key="${9}"
+  fi
   # _mkluks_common \
   #   "${_name}" \
   #   "${_encryption_key}" \
@@ -1243,12 +1249,13 @@ _get_mkimg_opts() {
     "${_name}"
     "${_image_path}"
     "${_size}"
-    "${encryption_key}"
+    "${key_type}"
     "${_epoch}"
     "${_label}"
     "${grub_support}"
     "${_writable}"
     "${_dir}"
+    "${encryption_key}"
   )
   _ext4_squashfs_opts=(
     "${_name}"
@@ -1301,7 +1308,6 @@ _get_mkimg_opts() {
   )
   _msg_info \
     "${_mkimg_opts[*]}"
-
 }
 
 ## File systems type support
@@ -1509,6 +1515,10 @@ _set_overrides() {
     "validate" \
     "only" \
     "false"
+  _set_override \
+    "key" \
+    "type" \
+    "auto"
   _set_override \
     "input" \
     "directory" \
