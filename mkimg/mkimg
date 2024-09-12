@@ -294,74 +294,6 @@ _run_mkfat() {
 
 ## LUKS
 
-# Prompts a passphrase to be used as key for a partition
-# $1: partition name
-# $2: partition label
-_ask_passwd() {
-    local _name="${1}" \
-          _label="${2}" \
-          _prompt=() \
-          _prompt_cmd \
-          _mismatch \
-          _mismatch_cmd="echo" \
-          _opts=("--timeout=69042")
-    local _msg=("Insert new passphrase"
-                "for ${_name} (${_label}): ") \
-          _confirm_msg="Confirm: " \
-          _mismatch_opts=() \
-          _mismatch_msg="Passwords mismatch." \
-          _confirm
-    if \
-      command \
-        -v \
-          zenity &> /dev/null && \
-      [ -n "${DISPLAY}" ]; then
-      _prompt_cmd="$( \
-          command \
-            -v \
-            zenity)"
-      _mismatch_cmd="${_prompt_cmd}"
-      _opts+=(
-        "--password"
-      )
-      _mismatch_opts+=(
-        "--info"
-        "--icon" "dialog-password"
-        "--text"
-      )
-    elif (
-      command \
-        -v \
-        systemd-ask-password &> /dev/null); then
-      _prompt_cmd=$( \
-        command \
-          -v \
-          systemd-ask-password)
-    fi
-    _prompt=(
-      "${_prompt_cmd}"
-        "${_opts[@]}"
-    )
-    _mismatch=(
-      "${_mismatch_cmd}"
-        "${_mismatch_opts[@]}"
-        "${_mismatch_msg}"
-    )
-    while true; do
-      _passphrase=$( \
-        "${_prompt[@]}" \
-          "${_msg[*]}")
-        echo \
-          "${_confirm_msg}"
-        _confirm=$( \
-          "${_prompt[@]}" \
-          "${_confirm_msg}")
-        [[ "${_passphrase}" == "${_confirm}" ]] && \
-          break
-        "${_mismatch[@]}"
-    done
-}
-
 # Determines correct fallocate options for an image at a chosen path
 # $1: path of the fallocate resulting image to verify options for
 _validate_fallocate_opts() {
@@ -715,20 +647,25 @@ _mkimg_fat() {
 # $2: an encryption key (prompts for one if empty)
 # $3: partition label
 _mkluks_common() {
-    local _name="${1}" \
-          _key="${2}" \
-          _label="${3}"
-    local _out="${work_dir}/${_label}.key"
-    if [ "${_key}" = "" ]; then
-        _ask_passwd "${_name}" "${_label}"
-        printf "%s" "${_passphrase}" > "${_out}"
-        _encryption_key="${_out}"
-    elif [ "${_key}" = "auto" ]; then
-        printf "%s" "$(tr -dc A-Za-z0-9 </dev/urandom | \
-                         head -c 20 ; \
-                       echo '')" > "${_out}"
-        _encryption_key="${_out}"
-    fi
+  local \
+    _name="${1}" \
+    _key="${2}" \
+    _label="${3}" \
+    _out \
+    _out_dir
+  _out_dir="$( \
+    dirname \
+      "${out_files}")"
+  _out="${_out_dir}/${_label}.key"
+  if [ "${_key}" = "" ]; then
+    ucantellme \
+      "${_out}"
+    _encryption_key="${_out}"
+  elif [ "${_key}" = "auto" ]; then
+    key-gen \
+      "${_out}"
+    _encryption_key="${_out}"
+  fi
 }
 
 ## SQUASHFS (compressed read-only image type)
