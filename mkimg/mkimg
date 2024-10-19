@@ -51,11 +51,14 @@ _requirements() {
 
 ## Utility functions
 
+_epoch_namespace() {
+  echo \
+    "93a870ff-8565-4cf3-a67b-f47299271a96"
+}
+
 # Returns epoch given a file system image name 
 # $1: value in fs_images
 _get_epoch() {
-  local \
-    _name="${1}"
   echo \
     $(( \
       SOURCE_DATE_EPOCH ))
@@ -71,10 +74,10 @@ _get_epoch_fsuuid() {
   if [[ "${_epoch}" == "" ]]; then
     _epoch="${SOURCE_DATE_EPOCH}"
   fi
-  _uuidgen_opts=(
+  _uuidgen_opts+=(
     --sha1
     --namespace
-      "${epoch_namespace}"
+      "$(_epoch_namespace)"
     --name
       "${_epoch}"
   )
@@ -138,12 +141,16 @@ _run_mkbtrfs() {
       '--quiet'
     )
   mkfs_btrfs_options+=(
-    '-L' "${_label}"
-    '-U' "${fsuuid}"
-    "${_mkfs_options[@]}")
-  mkfs.erofs "${mkfs_erofs_options[@]}" -- \
-             "${_image_path}" \
-             "${_dir}"
+    -L
+      "${_label}"
+    -U
+      "${fsuuid}"
+    "${_mkfs_options[@]}"
+  )
+  mkfs.erofs \
+    "${mkfs_erofs_options[@]}" -- \
+    "${_image_path}" \
+    "${_dir}"
   _msg_info "Done!"
 }
 
@@ -154,26 +161,28 @@ _run_mkbtrfs() {
 # $2: input directory
 # $3: UNIX time (to generate a date-based uuid)
 _run_mkerofs() {
-    local \
-      _image_path="${1}" \
-      _dir="${2}" \
-      _epoch="${3}" \
-      fsuuid
-    fsuuid="$( \
-      _get_epoch_fsuuid "${_epoch}")"
-    if [[ "${quiet}" == "y" ]]; then 
-      mkfs_erofs_options+=(
-        '--quiet')
-    fi
+  local \
+    _image_path="${1}" \
+    _dir="${2}" \
+    _epoch="${3}" \
+    fsuuid
+  fsuuid="$( \
+    _get_epoch_fsuuid \
+      "${_epoch}")"
+  if [[ "${quiet}" == "y" ]]; then 
     mkfs_erofs_options+=(
-      '-U'
-        "${fsuuid}"
-      "${_mkfs_options[@]}"
+      '--quiet'
     )
-    mkfs.erofs \
-      "${mkfs_erofs_options[@]}" -- \
-      "${_image_path}" \
-      "${_dir}"
+  fi
+  mkfs_erofs_options+=(
+    '-U'
+      "${fsuuid}"
+    "${_mkfs_options[@]}"
+  )
+  mkfs.erofs \
+    "${mkfs_erofs_options[@]}" -- \
+    "${_image_path}" \
+    "${_dir}"
 }
 
 ## EXT4
@@ -190,21 +199,21 @@ _run_mkext4() {
     _dir="${1}" \
     _image_path="${1}.img" \
     _size="${2}" \
-    _epoch="${3}" \
+    _uuid="${3}" \
     _label="${4}" \
     _writable="${5}" \
     _fsuuid \
     _ext4_hash_seed \
     _mkfs_ext4_opts=() \
     _tune2fs_opts=() \
-    _ext_opts=()
-  _fsuuid="$( \
-    _epoch_to_uuid \
-      "${_epoch}")"
+    _ext_opts=() \
+    _epoch
+  _epoch="$( \
+    _get_epoch)"
   _uuidgen_opts=(
     --sha1
     --namespace
-      "${epoch_namespace}"
+      "$(_epoch_namespace)"
     --name
       "${_epoch}"
     "ext4"
@@ -213,11 +222,11 @@ _run_mkext4() {
   )
   _ext4_hash_seed="$( \
     uuidgen \
-      "${_epoch_opts[@]}")"
+      "${_uuidgen_opts[@]}")"
   _ext_opts=(
     "lazy_itable_init=0"
     "root_owner=0:0"
-    "hash_seed=${ext4_hash_seed}")
+    "hash_seed=${_ext4_hash_seed}")
   _mkfs_ext4_opts=(
     -d
       "${_dir}"
@@ -300,7 +309,8 @@ _run_mkfat() {
   if (( _size_bytes < 2*1024*1024 )); then
     _msg=(
       "Image size is ${_size_bytes} bytes,"
-      "less than 2 MiB! Bumping up to 2 MiB")
+      "less than 2 MiB! Bumping up to 2 MiB"
+    )
     _msg_info \
       "${_msg[*]}"
     _size_bytes=$(( \
@@ -309,7 +319,8 @@ _run_mkfat() {
   # Where it spills?
   _size_bytes=$(( \
     _size_bytes * 10))
-  # Convert from bytes to KiB and round up to the next full MiB
+  # Convert from bytes to KiB
+  # and round up to the next full MiB
   # with an additional MiB for reserved sectors.
   _size_kib="$( \
     awk \
@@ -1531,8 +1542,15 @@ _img_uuid_auto_detect() {
       "uuid" \
       "type")"
   if [[ "${_type}" == "epoch" ]]; then
-  _get_epoch_fsuuid \
-    "${_epoch}"
+    if [[ "$(_get \
+               "img" \
+               "tuple")" == "ext4"* ]]; then
+      _epoch_to_uuid \
+        "${_epoch}"
+    else
+      _get_epoch_fsuuid \
+        "${_epoch}"
+    fi
   elif [[ "${_type}" == "default" ]]; then
     uuidgen
   fi
