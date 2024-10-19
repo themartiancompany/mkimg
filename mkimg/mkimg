@@ -424,13 +424,6 @@ _run_mkluks() {
     _mkluks_opts=() \
     _fallocate_opts=() \
     _fsuuid \
-  #   _pbkdf_memory='256'
-  # _fsuuid="$( \
-  #   _get_epoch_fsuuid \
-  #     "${_epoch}")"
-  #   basename \
-  #     "${_image_path}")".map"
-  # image_device="/dev/mapper/${_mapper}"
   if [[ "${_uuid}" != "" ]]; then
     _mkluks_opts+=(
       -u
@@ -476,14 +469,6 @@ _run_mkluks() {
   mkluks \
     "${_mkluks_opts[@]}"
     "${_image_path}"
-
-  #   "cryptsetup" "${_activation_opts[*]}"
-  #                "open" "${_image_path}"
-  #                       "${_mapper}")
-  # while ! eval "${_activation_cmd[*]}"; do
-  #     _close_luks_device "${image_device}"
-  # done
-  # _msg_info "Done!"
 }
 
 
