@@ -26,6 +26,7 @@ _global_variables() {
   img_writable=""
   img_compression=""
   img_uuid=""
+  uuid_type=""
   size_auto=""
   key_type=""
   encryption_key=""
@@ -193,8 +194,9 @@ _run_mkext4() {
     _label="${4}" \
     _writable="${5}" \
     _fsuuid \
-    ext4_hash_seed \
-    mkfs_ext4_options=() \
+    _ext4_hash_seed \
+    _mkfs_ext4_opts=() \
+    _tune2fs_opts=() \
     _ext_opts=()
   _fsuuid="$( \
     _epoch_to_uuid \
@@ -209,20 +211,22 @@ _run_mkext4() {
     "hash"
     "seed"  
   )
-  ext4_hash_seed="$( \
+  _ext4_hash_seed="$( \
     uuidgen \
       "${_epoch_opts[@]}")"
   _ext_opts=(
     "lazy_itable_init=0"
     "root_owner=0:0"
     "hash_seed=${ext4_hash_seed}")
-  mkfs_ext4_options=(
+  _mkfs_ext4_opts=(
     -d
       "${_dir}"
     -O
       '^has_journal,^resize_inode'
     -E
-      "$(IFS=, ; echo ${_ext_opts[*]})"
+      "$(IFS=, ; \
+         echo \
+           ${_ext_opts[*]})"
     -m
       0
     -F
@@ -231,17 +235,20 @@ _run_mkext4() {
     -U
       'clear'
     )
-  [[ "${_label}" != "" ]] && \
-    mkfs_ext4_options+=('-L' "${_label}")
+  if [[ "${_label}" != "" ]]; then
+    _mkfs_ext4_options+=(
+      -L
+        "${_label}")
+  fi
   if [[  "${quiet}" == "y" ]]; then
-    mkfs_ext4_options+=(
+    _mkfs_ext4_options+=(
       -q
     )
   fi
   if [[ "${quiet}" == "n" ]]; then
     E2FSPROGS_FAKE_TIME="${_epoch}" \
     mkfs.ext4 \
-      "${mkfs_ext4_options[@]}" -- \
+      "${_mkfs_ext4_options[@]}" -- \
       "${_image_path}" \
       "${_size}K"
   elif [[ "${quiet}" == "n" ]]; then
@@ -251,18 +258,21 @@ _run_mkext4() {
       "${_image_path}" \
       "${_size}K" > /dev/null 2>&1
   fi
-  tune2fs \
-    -c \
-      0 \
-    -i \
-      0 -- \
-    "${_image_path}" > /dev/null
+  _tune2fs_opts+=(
+    -c
+      0
+    -i
+      0 
+  )
   if [ "${_writable}" != "true" ]; then
-    tunefs \
+    _tune2fs_opts+=(
       -O \
-        read-only \
-      "${_image_path}"
+        read-only
+    )
   fi
+  tune2fs \
+    "${_tune2fs_opts[@]}" -- \
+    "${_image_path}" > /dev/null
 }
 
 ## FAT
@@ -272,49 +282,64 @@ _run_mkext4() {
 # $2: image size in bytes
 # $3: image label
 _run_mkfat() {
-    local _image_path="${1}" \
-          _size_bytes=${2} \
-          _label="${3}" \
-          _deps=() \
-          _mkfs_fat_options=() \
-          _fun \
-          _size_kib="0" \
-          _msg=()
-    _deps=(
-      'function ceil(x){return int(x)+(x>int(x))}'
-      'function byte_to_kib(x){return x/1024}'
-      'function mib_to_kib(x){return x*1024}')
-    _fun='mib_to_kib(ceil((byte_to_kib($1)+1024)/1024))'
-    (( _size_bytes < 2*1024*1024 )) && \
-      _msg=("Image size is ${_size_bytes} bytes,"
-            "less than 2 MiB! Bumping up to 2 MiB") \
-      _msg_info "${_msg[*]}" && \
-      _size_bytes=$((20*1024*1024))
-    # Where it spills?
-    _size_bytes=$((_size_bytes * 10))
-    # Convert from bytes to KiB and round up to the next full MiB
-    # with an additional MiB for reserved sectors.
-    _size_kib="$(awk "${_deps[*]} END {print ${_fun}}" <<< \
-                   "${_size_bytes}")"
-    # The FAT image must be created with mkfs.fat, not mformat,
-    # as some systems have issues with mformat made images:
-    # https://lists.gnu.org/archive/html/grub-devel/2019-04/msg00099.html
-    _mkfs_fat_options=(
-      -C
-      -n "${_label}")
-    _msg_info "Creating FAT image of size: ${_size_kib} KiB..."
-    if [[ "${quiet}" == "y" ]]; then
-        # mkfs.fat does not have a -q/--quiet option, so
-        # redirect stdout to /dev/null instead
-        # https://github.com/dosfstools/dosfstools/issues/103
-        mkfs.fat "${_mkfs_fat_options[@]}" \
-                 "${_image_path}" \
-                 "${_size_kib}" > /dev/null
-    else
-        mkfs.fat "${_mkfs_fat_options[@]}" \
-                 "${_image_path}" \
-                 "${_size_kib}"
-    fi
+  local \
+    _image_path="${1}" \
+    _size_bytes=${2} \
+    _label="${3}" \
+    _deps=() \
+    _mkfs_fat_options=() \
+    _fun \
+    _size_kib="0" \
+    _msg=()
+  _deps=(
+    'function ceil(x){return int(x)+(x>int(x))}'
+    'function byte_to_kib(x){return x/1024}'
+    'function mib_to_kib(x){return x*1024}'
+  )
+  _fun='mib_to_kib(ceil((byte_to_kib($1)+1024)/1024))'
+  if (( _size_bytes < 2*1024*1024 )); then
+    _msg=(
+      "Image size is ${_size_bytes} bytes,"
+      "less than 2 MiB! Bumping up to 2 MiB")
+    _msg_info \
+      "${_msg[*]}"
+    _size_bytes=$(( \
+      20*1024*1024))
+  fi
+  # Where it spills?
+  _size_bytes=$(( \
+    _size_bytes * 10))
+  # Convert from bytes to KiB and round up to the next full MiB
+  # with an additional MiB for reserved sectors.
+  _size_kib="$( \
+    awk \
+      "${_deps[*]} END {print ${_fun}}" <<< \
+      "${_size_bytes}")"
+  # The FAT image must be created with mkfs.fat, not mformat,
+  # as some systems have issues with mformat made images:
+  # https://lists.gnu.org/archive/html/grub-devel/2019-04/msg00099.html
+  _mkfs_fat_options=(
+    -C
+    -n
+      "${_label}"
+  )
+  _msg_info \
+    "Creating FAT image of size: ${_size_kib} KiB..."
+  if [[ "${quiet}" == "y" ]]; then
+    # mkfs.fat does not have a -q/--quiet option, so
+    # redirect stdout to /dev/null instead
+    # https://github.com/dosfstools/dosfstools/issues/103
+    mkfs.fat \
+      "${_mkfs_fat_options[@]}" \
+      "${_image_path}" \
+      "${_size_kib}" > \
+      /dev/null
+  else
+    mkfs.fat \
+      "${_mkfs_fat_options[@]}" \
+      "${_image_path}" \
+      "${_size_kib}"
+  fi
 }
 
 ## LUKS
@@ -322,34 +347,59 @@ _run_mkfat() {
 # Determines correct fallocate options for an image at a chosen path
 # $1: path of the fallocate resulting image to verify options for
 _validate_fallocate_opts() {
-    local _image_path="${1}"
-    local _posix_error=("fallocate:"
-                        "fallocate failed:"
-                        "Operation not supported")
-    local _msg
-    _msg="$(fallocate -l "100K" \
-                      "${_image_path}.test" 2>&1)" 
-    if [ "${_msg}" == "${_posix_error[*]}" ]; then
-        rm "${_image_path}.test"
-        echo '--posix' 
-    elif [ "${_msg}" != "" ]; then
-        _msg_error "${_msg}" 1
-    fi
+  local \
+    _image_path="${1}" \
+    _posix_error=() \
+    _msg
+  _posix_error=(
+    "fallocate:"
+    "fallocate failed:"
+    "Operation not supported"
+  )
+  _msg="$( \
+    fallocate \
+      -l \
+        "100K" \
+      "${_image_path}.test" 2>&1)" 
+  if [ "${_msg}" == "${_posix_error[*]}" ]; then
+    rm \
+      "${_image_path}.test"
+    echo \
+      '--posix' 
+  elif [ "${_msg}" != "" ]; then
+    _msg_error \
+      "${_msg}" \
+      1
+  fi
 }
 
 # Closes a LUKS device mapper
 # $1: device mapper to close
 _close_luks_device() {
-    local _device="${1}"
-    local _mapper
-    _mapper=$(basename "${_device}")
-    blockdev --flushbufs \
-             "${_device}" > /dev/null 2>&1 || true
-    cryptsetup luksClose "${_mapper}" > /dev/null 2>&1 || true
-    if [ -e "${_device}" ]; then
-        dmsetup remove "${_device}" > /dev/null 2>&1 || true
-    fi
-    sync
+  local \
+    _device="${1}" \
+    _mapper
+  _mapper=$( \
+    basename \
+      "${_device}")
+  blockdev \
+    --flushbufs \
+    "${_device}" > \
+    /dev/null 2>&1 || \
+      true
+  cryptsetup \
+    luksClose \
+    "${_mapper}" > \
+    /dev/null 2>&1 || \
+    true
+  if [ -e "${_device}" ]; then
+    dmsetup \
+      remove \
+      "${_device}" > \
+      /dev/null 2>&1 || \
+      true
+  fi
+  sync
 }
 
 # Creates and opens a LUKS image of the size
@@ -363,120 +413,77 @@ _close_luks_device() {
 # $7: if true, dm-verity layer will be disabled
 #     to be able to be opened by GRUB
 _run_mkluks() {
-    local _image_path="${1}" \
-          _size="${2}" \
-          _encryption_key="${3}" \
-          _epoch="${4}" \
-          _label="${5}" \
-          _writable="${6}" \
-          _grub="${7}"
-    local _activation_cmd=() \
-          _activation_opts=() \
-          _config_cmd=() \
-          _cryptsetup_opts=(
-            '--type' 'luks2'
-            '--timeout=69042') \
-          _fallocate_opts=(
-            '--length'
-            "${_size}K") \
-          _format_opts=() \
-          _format_cmd=() \
-          _fsuuid \
-          _key_msg="" \
-          _key_opts=() \
-          _key_size='512' \
-          _mapper \
-          _msg=() \
-          _pbkdf_memory='256' \
-          _sector_size='4096' \
-          _uuid_set_cmd=()
-    _fsuuid="$( \
-      _get_epoch_fsuuid \
-        "${_epoch}")"
-    _mapper=$( \
-      basename \
-        "${_image_path}")".map"
-    image_device="/dev/mapper/${_mapper}"
-    if [[ "${_encryption_key}" != "" ]]; then
-      _key_opts+=(
-        "--key-file=${_encryption_key}"
-      )
-      _cryptsetup_opts+=(
-        "${_key_opts[@]}")
-      _key_msg="with key $(basename "${_encryption_key}")"
-    fi
+  local \
+    _image_path="${1}" \
+    _size="${2}" \
+    _encryption_key="${3}" \
+    _uuid="${4}" \
+    _label="${5}" \
+    _writable="${6}" \
+    _grub="${7}" \
+    _mkluks_opts=() \
+    _fallocate_opts=() \
+    _fsuuid \
+  #   _pbkdf_memory='256'
+  # _fsuuid="$( \
+  #   _get_epoch_fsuuid \
+  #     "${_epoch}")"
+  #   basename \
+  #     "${_image_path}")".map"
+  # image_device="/dev/mapper/${_mapper}"
+  if [[ "${_uuid}" != "" ]]; then
+    _mkluks_opts+=(
+      -u
+        "${_uuid}"
+    )
+  fi
+  if [[ "${_encryption_key}" != "" ]]; then
+    _mkluks_opts+=(
+      -k 
+        "${_encryption_key}"
+    )
+  fi
+  if [[ "${_label}" != "" ]]; then
+    _mkluks_opts+=(
+      -l
+        "${_label}"
+    )
+  fi
+  # # Remove as soon as gcrypt adds support for argon2i
+  # # and GRUB for the dm-integrity layer
+  if [ "${_grub}" == "true" ]; then
+    _mkluks_opts+=(
+      -g
+    )
+  fi
+  if [ "${_writable}" != "true" ]; then
+    _mkluks_opts+=(
+      -r
+    )
+  fi
+  _fallocate_opts+=(
+    '--length'
+    "${_size}K"
+    "$(_validate_fallocate_opts \
+         "${_image_path}")"
+  )
+  _mkluks_opts+=(
+    -s 
+  )
+  fallocate \
+    "${_fallocate_opts[@]}" \
+    "${_image_path}"
+  mkluks \
+    "${_mkluks_opts[@]}"
+    "${_image_path}"
 
-    _activation_opts+=("${_cryptsetup_opts[@]}")
-    _format_opts+=(
-      "${_cryptsetup_opts[@]}"
-      '--sector-size' "${_sector_size}"
-      '--key-size' "${_key_size}")
-
-    # Remove as soon as gcrypt adds support for argon2i
-    # and GRUB for the dm-integrity layer
-    if [ "${_grub}" == "true" ]; then
-        _format_opts+=(
-          '--pbkdf' 'pbkdf2')
-    else
-        _format_opts+=(
-          '--pbkdf-memory' "${_pbkdf_memory}"
-          '--integrity' 'hmac-sha512')
-    fi
-
-    if [ "${_writable}" != "true" ]; then
-        _msg_info "Integrity journal disabled"
-        _activation_opts+=(
-          '--persistent' \
-          '--integrity-no-journal' \
-          '--key-size' "${_key_size}")
-    fi
-    _msg=("Creating LUKS image $(basename "${_image_path}")"
-          "with cryptsetup (${_size}KB) ${_key_msg}")
-    _msg_info "${_msg[*]}"
-    _fallocate_opts+=(
-      "$( \
-        _validate_fallocate_opts \
-          "${_image_path}")")
-    fallocate \
-      "${_fallocate_opts[@]}" \
-      "${_image_path}"
-    _format_cmd=(
-      "cryptsetup" "-q"
-                   "-y" "luksFormat" "${_format_opts[*]}"
-                                     "${_image_path}")
-    while ! eval "${_format_cmd[*]}"; do
-        sleep 1
-    done
-
-    _msg_info "Setting label ${_label}"
-    _config_cmd=("cryptsetup" "config" "${_cryptsetup_opts[*]}"
-                                       "${_image_path}"
-                                         "--label" "${_label}")
-    while ! eval "${_config_cmd[*]}"; do
-        _close_luks_device "${image_device}"
-    done
-
-    _msg_info "Setting UUID ${_fsuuid}"
-    _uuid_set_cmd=(
-      "cryptsetup" "-q"
-                   "-y"
-                   "luksUUID" "--uuid ${_fsuuid}"
-                              "${_image_path}")
-    while ! eval "${_uuid_set_cmd[*]}"; do
-        _close_luks_device "${image_device}"
-    done
-
-    _close_luks_device "${image_device}"
-
-    _msg_info "Opening device on mapper ${_mapper}"
-    _activation_cmd=(
-      "cryptsetup" "${_activation_opts[*]}"
-                   "open" "${_image_path}"
-                          "${_mapper}")
-    while ! eval "${_activation_cmd[*]}"; do
-        _close_luks_device "${image_device}"
-    done
-    _msg_info "Done!"
+  #   "cryptsetup" "${_activation_opts[*]}"
+  #                "open" "${_image_path}"
+  #                       "${_mapper}")
+  # while ! eval "${_activation_cmd[*]}"; do
+  #     _close_luks_device "${image_device}"
+  # done
+  # _msg_info "Done!"
 }
 
 
@@ -529,21 +536,31 @@ _run_mksquashfs() {
 # $3: UNIX time (to generate a date-based uuid)
 # $4: partition label
 _run_mkswap() {
-    local _image_path="${1}"
-    local _size="${2}"
-    local _epoch="${3}"
-    local _label="${4}"
-    local _fsuuid
-    _fsuuid="$(_get_epoch_fsuuid "${_epoch}")"
-    dd if=/dev/zero \
-       of="${_image_path}" \
-       bs=1K count="${_size}" \
-       status=progress
-    chmod 0600 "${_image_path}"
-    sync
-    mkswap -L "${_label}" \
-           -U "${_fsuuid}" \
-           "${_image_path}"
+  local \
+    _image_path="${1}" \
+    _size="${2}" \
+    _epoch="${3}" \
+    _label="${4}" \
+    _fsuuid
+  _fsuuid="$( \
+    _get_epoch_fsuuid \
+      "${_epoch}")"
+  dd \
+    if=/dev/zero \
+    of="${_image_path}" \
+    bs=1K \
+    count="${_size}" \
+    status=progress
+  chmod \
+    0600 \
+    "${_image_path}"
+  sync
+  mkswap \
+    -L \
+      "${_label}" \
+    -U \
+      "${_fsuuid}" \
+    "${_image_path}"
 }
 
 #################################################
@@ -556,23 +573,30 @@ _run_mkswap() {
 # from the outer image size
 # $1: outer partition size
 _get_internal_size() {
-    local _size="${1}" _ratio
-    local _s=50 _S=200 _l=1000 _L=5000
-    if [[ "${_size}" -lt $((_s * 1000)) ]]; then
-        _ratio=60
-    elif [[ "${_size}" -gt $((_s * 1000)) ]] && \
-         [[ "${_size}" -lt $((_S * 1000)) ]]; then
-        _ratio=70
-    elif [[ "${_size}" -gt $((_S * 1000)) ]] && \
-         [[ "${_size}" -lt $((_l * 1000)) ]]; then
-        _ratio=75
-    elif [[ "${_size}" -gt $((_l * 1000)) ]] && \
-         [[ "${_size}" -lt $((_L * 1000)) ]]; then
-        _ratio=80
-    else
-        _ratio=85
-    fi
-    echo $(((_size * _ratio)/100))
+  local \
+    _size="${1}" \
+    _ratio \
+    _s=50 \
+    _S=200 \
+    _l=1000 \
+    _L=5000
+  if [[ "${_size}" -lt $((_s * 1000)) ]]; then
+    _ratio=60
+  elif [[ "${_size}" -gt $((_s * 1000)) ]] && \
+     [[ "${_size}" -lt $((_S * 1000)) ]]; then
+    _ratio=70
+  elif [[ "${_size}" -gt $((_S * 1000)) ]] && \
+     [[ "${_size}" -lt $((_l * 1000)) ]]; then
+    _ratio=75
+  elif [[ "${_size}" -gt $((_l * 1000)) ]] && \
+     [[ "${_size}" -lt $((_L * 1000)) ]]; then
+    _ratio=80
+  else
+    _ratio=85
+  fi
+  echo \
+    $(( \
+      (_size * _ratio) / 100 ))
 }
 
 ### Base types
@@ -626,12 +650,14 @@ _mkimg_btrfs() {
 # $2: directory to be put onto the image
 # $3: UNIX time (for a date-based uuid)
 _mkimg_erofs() {
-    local _image_path="${1}"
-    local _dir="${2}"
-    local _epoch="${3}"
-    _run_mkerofs "${_image_path}" \
-                 "${_dir}" \
-                 "${_epoch}"
+  local \
+    _image_path="${1}" \
+    _dir="${2}" \
+    _epoch="${3}"
+  _run_mkerofs \
+    "${_image_path}" \
+    "${_dir}" \
+    "${_epoch}"
 }
 
 ## EXT4 (easily readable file system)
@@ -643,19 +669,24 @@ _mkimg_erofs() {
 # $4: UNIX time (for a date-based uuid)
 # $5: partition label
 _mkimg_ext4() {
-    local _dir="${1}"
-    local _image_path="${2}"
-    local _size="${3}"
-    local _epoch="${4}"
-    local _label="${5}"
-    local _writable="true"
-    _run_mkext4 "${_dir}" \
-                "$(_get_internal_size "${_size}")" \
-                "${_epoch}" \
-                "${_label}" \
-                "${_writable}"
-    mv "${_dir}.img" "${_image_path}"
-    sync
+  local \
+    _dir="${1}" \
+   _image_path="${2}" \
+   _size="${3}" \
+   _epoch="${4}" \
+   _label="${5}" \
+   _writable="true"
+  _run_mkext4 \
+    "${_dir}" \
+    "$(_get_internal_size \
+         "${_size}")" \
+    "${_epoch}" \
+    "${_label}" \
+    "${_writable}"
+  mv \
+    "${_dir}.img" \
+    "${_image_path}"
+  sync
 }
 
 ## FAT
@@ -665,7 +696,8 @@ _mkimg_ext4() {
 # $2: image size in bytes
 # $3: image label
 _mkimg_fat() {
-    _run_mkfat "${@}"
+  _run_mkfat \
+    "$@"
 }
 
 ## LUKS (encrypted file system container)
@@ -719,7 +751,7 @@ _mkimg_squashfs() {
 # $4: partition label
 _mkimg_swap() {
   _run_mkswap \
-    "${@}"
+    "$@"
 }
 
 ### 2-layered types
@@ -762,7 +794,9 @@ _mkimg_erofs+luks() {
       "${_dir}" \
       "${_epoch}"
     _tmp_size=$(_get_size "${_tmp_img}")
-    _size=$(( 69420 + _tmp_size * 12 / 10))
+    _size=$(( \
+      69420 + \
+      _tmp_size * 12 / 10))
   fi
   _mkluks_common \
     "${_name}" \
@@ -1471,8 +1505,16 @@ _img_uuid_auto_detect() {
     _uuid
   _epoch="$( \
     _get_epoch)"
+  _type="$( \
+    _get \
+      "uuid" \
+      "type")"
+  if [[ "${_type}" == "epoch" ]];
   _get_epoch_fsuuid \
     "${_epoch}"
+  elif [[ "${_type}" == "default" ]];
+    uuidgen
+  fi
 }
 
 _img_tuple_auto_detect() {
@@ -1496,6 +1538,10 @@ _set_overrides() {
     "creation" \
     "date" \
     "$(_get_date_human)"
+  _set_override \
+    "uuid" \
+    "type" \
+    "epoch"
   _set_override \
     "img" \
     "uuid" \
@@ -1589,6 +1635,9 @@ usage:
      -t                   Only verify if requirements to produce the image
                           are satisfied.
                           Default: $(_get "validate" "only")
+     -m                   UUID auto generation type
+                          Values are 'default' and 'epoch'
+                          Default: '$(_get "uuid" "type")'
      -h                   This message.
      -c                   Enable color output
      -v                   Enable verbose output
@@ -1628,6 +1677,7 @@ _show_config() {
   _msg_info "            Creation date:   $(_get "creation" "date")"
   _msg_info "           Output file(s):   ${out_files[*]}"
   _msg_info "               Image UUID:   $(_get "img" "uuid")"
+  _msg_info "                UUID Type:   $(_set "uuid" "type")"
   _msg_info "       Image format tuple:   $(_get "img" "tuple")"
   _msg_info "               Image size:   $(_get "img" "size")"
   _msg_info "              Image label:   $(_get "img" "label")"
@@ -1650,7 +1700,7 @@ _config_user_init \
 # shellcheck disable=SC2034
 while \
   getopts \
-    'u:f:d:s:n:l:K:k:wtgcvh?' \
+    'u:f:d:s:n:l:K:k:wtgm:cvh?' \
     arg; do
   case \
     "${arg}" in
@@ -1666,6 +1716,7 @@ while \
     w) override_img_writable="true" ;;
     t) override_validate_only="true" ;;
     g) override_grub_support="false" ;;
+    m) override_uuid_type="${OPTARG}" ;;
     c) override_color="y" ;;
     v) override_quiet="n" ;;
     h|?) _set_overrides && \
