@@ -1015,7 +1015,7 @@ _mkimg_btrfs+luks() {
     "${_label}" \
     "${_writable}" \
     "${_grub}"
-  _run_btrfs \
+  _run_mkbtrfs \
     "${_dir}" \
     "$(_get_internal_size \
       "${_size}")" \
