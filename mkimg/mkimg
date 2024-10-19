@@ -1610,6 +1610,10 @@ _set_overrides() {
     "support" \
     "true"
   _set_override \
+    "img" \
+    "compression" \
+    "true"
+  _set_override \
     "validate" \
     "only" \
     "false"
@@ -1666,13 +1670,15 @@ usage:
                           Default: $(_get "key" "type")
      -k <encryption_key>  LUKS container encryption key
                           Default: $(_get "encryption" "key")
-     -w                   Specify whether the image is intended to be writable
+     -w <bool>            Specify whether the image is intended to be writable
                           Default: $(_get "img" "writable")
-     -g                   Specify whether the image is intended to be able
+     -g <bool>            Specify whether the image is intended to be able
                           to be opened by GRUB
                           Default: $(_get "grub" "support")
-     -t                   Only verify if requirements to produce the image
-                          are satisfied.
+     -x <bool>            Specify whether enable compression
+                          Default: $(_get "img" "compression")
+     -t                   Only verify if requirements
+                          to produce the image are satisfied.
                           Default: $(_get "validate" "only")
      -m                   UUID auto generation type
                           Values are 'default' and 'epoch'
@@ -1739,7 +1745,7 @@ _config_user_init \
 # shellcheck disable=SC2034
 while \
   getopts \
-    'u:f:d:s:n:l:K:k:wtgm:cvh?' \
+    'u:f:d:s:n:l:K:k:w:tg:m:cvh?' \
     arg; do
   case \
     "${arg}" in
@@ -1751,10 +1757,9 @@ while \
     l) override_img_label="${OPTARG}" ;;
     K) override_key_type="${OPTARG}" ;;
     k) override_encryption_key="${OPTARG}" ;;
-    w) override_img_writable="true" ;;
-    w) override_img_writable="true" ;;
+    w) override_img_writable="${OPTARG}" ;;
     t) override_validate_only="true" ;;
-    g) override_grub_support="false" ;;
+    g) override_grub_support="${OPTARG}" ;;
     m) override_uuid_type="${OPTARG}" ;;
     c) override_color="y" ;;
     v) override_quiet="n" ;;
