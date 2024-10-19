@@ -1251,7 +1251,15 @@ _get_mkimg_opts() {
     _squashfs_luks_opts=() \
     _swap_opts=() \
     _swap_luks_opts=() \
-    _compression
+    _dir \
+    _epoch \
+    _size \
+    _name \
+    _writable
+    _compression \
+    _grub \
+    _key
+  _key="${encryption_key}"
   _dir="${input_directory}"
   _epoch="${img_epoch}"
   _size="${img_size}"
@@ -1259,30 +1267,36 @@ _get_mkimg_opts() {
   _name="${img_name}"
   _compression="${img_compression}"
   _writable="${img_writable}"
+  _grub="${grub_support}"
   _btrfs_opts=(
     "${_image_path}"
     "${_dir}"
     "${_epoch}"
     "${_size}"
     "${_label}"
-    "${_compression}")
+    "${_compression}"
+  )
   _erofs_opts=(
     "${_image_path}"
     "${_dir}"
-    "${_epoch}")
+    "${_epoch}"
+  )
   _ext4_opts=(
     "${_dir}"
     "${_image_path}"
     "${_size}"
     "${_epoch}"
-    "${_label}")
+    "${_label}"
+  )
   _fat_opts=(
     "${_image_path}"
     "${_size}"
-    "${_label}")
+    "${_label}"
+  )
   _squashfs_opts=( 
     "${_dir}"
-    "${_image_path}")
+    "${_image_path}"
+  )
   _swap_opts=(
     "${_image_path}"
     "${_size}"
@@ -1294,11 +1308,11 @@ _get_mkimg_opts() {
     "${_dir}"
     "${_image_path}"
     "${_size}"
-    "${encryption_key}"
+    "${_encryption_key}"
     "${_epoch}"
     "${_label}"
-    "${grub_support}"
-    "${img_compression}"
+    "${_grub}"
+    "${_compression}"
   )
   # shellcheck disable=SC1036
   # shellcheck disable=SC1056
@@ -1308,10 +1322,10 @@ _get_mkimg_opts() {
     "${_dir}"
     "${_image_path}"
     "${size_auto}"
-    "${encryption_key}"
+    "${_key}"
     "${_epoch}"
     "${_label}"
-    "${grub_support}"
+    "${_grub}"
   )
   _ext4_luks_opts=(
     "${_name}"
@@ -1320,10 +1334,10 @@ _get_mkimg_opts() {
     "${key_type}"
     "${_epoch}"
     "${_label}"
-    "${grub_support}"
+    "${_grub}"
     "${_writable}"
     "${_dir}"
-    "${encryption_key}"
+    "${_key}"
   )
   _ext4_squashfs_opts=(
     "${_name}"
@@ -1332,7 +1346,8 @@ _get_mkimg_opts() {
     "${_size}"
     "${_epoch}"
     "${_label}"
-    "${_writable}")
+    "${_writable}"
+  )
   _squashfs_luks_opts=(
     "${_name}"
     "${_dir}"
