@@ -1254,7 +1254,7 @@ _get_mkimg_opts() {
     _epoch \
     _size \
     _name \
-    _writable
+    _writable \
     _compression \
     _grub \
     _key
@@ -1307,7 +1307,7 @@ _get_mkimg_opts() {
     "${_dir}"
     "${_image_path}"
     "${_size}"
-    "${_encryption_key}"
+    "${_key}"
     "${_epoch}"
     "${_label}"
     "${_grub}"
@@ -1500,31 +1500,53 @@ _validate_requirements_image_type_ext4+squashfs+luks() {
 }
 
 
+_validate_requirements_image_type() {
+  local \
+    _image_type="${1}"
+  _validate_fun="_validate_requirements_image_type_${_image_type}"
+  if typeset \
+       -f \
+         "${_validate_fun}" &> \
+       /dev/null; then
+    "${_validate_fun}"
+  else
+    _msg_error \
+      "Function '${_validate_fun}' does not exist." \
+      1
+  fi
+}
 
 # Produces a file system image
 # $1: value in 'fs_images'
 _mkimg() {
   local \
-    _type="${1}" \
-    _validate="${2}" \
+    _uuid="${1}" \
+    _type="${2}" \
+    _validate="${3}" \
     _imgs=() \
-    _mkimg_opts=()
+    _mkimg_opts=() \
+    _image_path
+  shift \
+    3
   _imgs=(
     "$@"
   )
-  rm \
-    -f -- \
-    "${_imgs[@]}"
-  # Raid support will be added when
-  # a machine with support for it will be
-  # available
-  _image_path="${_imgs}"
-  _get_mkimg_opts \
+  if [[ "${_imgs[*]}" != "" ]]; then
+    rm \
+      -rf -- \
+      "${_imgs[@]}"
+    # Raid support will be added when
+    # a machine with support for it will be
+    # available
+  fi
+  _image_path="${_imgs[@]}"
+  _validate_requirements_image_type \
     "${_type}"
-  "_validate_requirements_image_type_${_type}"
   if [[ "${_validate}" == true ]]; then
     return
   fi
+  _get_mkimg_opts \
+    "${_type}"
   "_mkimg_${_type}" \
     "${_mkimg_opts[@]}"
 }
@@ -1795,14 +1817,15 @@ shift \
     OPTIND - 1 \
   ))
 _set_overrides
-(( $# < 1 )) && \
-[[ "${validate_only}" == false ]] && \
+if (( $# < 1 )) && \
+   [[ "${validate_only}" == false ]]; then
   _msg_error \
     "no output image(s) specified" \
-    0 && \
-  _set_overrides && \
+    0
+  _set_overrides
   _usage \
     1
+fi
 out_files=(
   "$@"
 )
