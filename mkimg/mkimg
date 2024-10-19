@@ -423,7 +423,17 @@ _run_mkluks() {
     _grub="${7}" \
     _mkluks_opts=() \
     _fallocate_opts=() \
-    _fsuuid \
+    _cryptsetup_opts=() \
+    _activation_opts=() \
+    _fsuuid
+  _cryptsetup_opts=(
+    --type
+      'luks2'
+    --timeout=69042
+  )
+  _mapper=$( \
+    basename \
+      "${_image_path}")".map"
   if [[ "${_uuid}" != "" ]]; then
     _mkluks_opts+=(
       -u
@@ -435,6 +445,11 @@ _run_mkluks() {
       -k 
         "${_encryption_key}"
     )
+    _key_opts+=(
+      "--key-file=${_encryption_key}"
+    )
+    _cryptsetup_opts+=(
+      "${_key_opts[@]}")
   fi
   if [[ "${_label}" != "" ]]; then
     _mkluks_opts+=(
@@ -449,9 +464,17 @@ _run_mkluks() {
       -g
     )
   fi
+  _activation_opts+=(
+    "${_cryptsetup_opts[@]}"
+  )
   if [ "${_writable}" != "true" ]; then
     _mkluks_opts+=(
       -r
+    )
+    _activation_opts+=(
+      '--persistent'
+      '--integrity-no-journal'
+      # '--key-size' "${_key_size}"
     )
   fi
   _fallocate_opts+=(
@@ -459,9 +482,6 @@ _run_mkluks() {
     "${_size}K"
     "$(_validate_fallocate_opts \
          "${_image_path}")"
-  )
-  _mkluks_opts+=(
-    -s 
   )
   fallocate \
     "${_fallocate_opts[@]}" \
@@ -478,17 +498,25 @@ _run_mkluks() {
 # $1: RAID name
 # $2: RAID type (only '1' for now)
 _run_mkraid() {
-    # local _image_path="${1}"
-    # local _dev_path="${1}"
-    local _name="${1}"
-    # local _size="${2}" # should go into the array
-    local _type="${2}"
-    shift 3
-    local _devices=("$@")
-    mdadm --create "/dev/md${_name}.map" \
-          --level="${_type}" \
-          --run \
-          "${_devices[@]}"
+  # local \
+  #   _image_path="${1}" \
+  #   _dev_path="${2}"
+  local \
+    _name="${1}" \
+    _type="${2}"  \
+    _size="${3}" \
+    _devices=()
+  shift \
+    3
+  _devices=(
+    "$@"
+  )
+  mdadm 
+    --create \
+      "/dev/md${_name}.map" \
+    --level="${_type}" \
+    --run \
+      "${_devices[@]}"
 }
 
 ## SQUASHFS
@@ -498,18 +526,24 @@ _run_mkraid() {
 # $1: directory or a file system image
 # $2: path of the result image
 _run_mksquashfs() {
-    local _directory_or_fs="${1}" \
-          _image_path="${2}" \
-          _msg=() \
-          mksquashfs_options=("${_mkfs_options[@]}")
-    [[ ! "${quiet}" == "y" ]] || \
-      mksquashfs_options+=(
-        '-no-progress'
-        '-quiet')
-    mksquashfs "${_directory_or_fs}" \
-               "${_image_path}" \
-               -noappend \
-               "${mksquashfs_options[@]}"
+  local \
+    _directory_or_fs="${1}" \
+    _image_path="${2}" \
+    _msg=() \
+    _mksquashfs_options=()
+  _mksquashfs_options=(
+    "${_mkfs_options[@]}"
+  )
+  if [[ "${quiet}" == "y" ]]; then
+    _mksquashfs_options+=(
+      '-no-progress'
+      '-quiet')
+  fi
+  mksquashfs \
+    "${_directory_or_fs}" \
+    "${_image_path}" \
+    -noappend \
+    "${_mksquashfs_options[@]}"
 }
 
 
@@ -1375,7 +1409,9 @@ _validate_requirements_image_type_luks() {
     _key
   # TODO: Switch to mkluks
   _check_cmd \
-    "cryptsetup" \
+    "cryptsetup"
+  _check_cmd \
+    "mkluks" \
     "luks-tools"
   # TODO: this part is probably inside mkluks
   # _key="$( \
