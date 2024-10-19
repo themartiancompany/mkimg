@@ -1530,10 +1530,10 @@ _img_uuid_auto_detect() {
     _get \
       "uuid" \
       "type")"
-  if [[ "${_type}" == "epoch" ]];
+  if [[ "${_type}" == "epoch" ]]; then
   _get_epoch_fsuuid \
     "${_epoch}"
-  elif [[ "${_type}" == "default" ]];
+  elif [[ "${_type}" == "default" ]]; then
     uuidgen
   fi
 }
