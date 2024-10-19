@@ -25,6 +25,7 @@ _global_variables() {
   img_epoch=""
   img_writable=""
   img_compression=""
+  img_uuid=""
   size_auto=""
   key_type=""
   encryption_key=""
@@ -56,8 +57,17 @@ _get_epoch() {
     _name="${1}"
   echo \
     $(( \
-      SOURCE_DATE_EPOCH + \
-      "${_name}_const" ))
+      SOURCE_DATE_EPOCH ))
+}
+
+_img_uuid_auto_detect() {
+  local \
+    _epoch \
+    _uuid
+  _epoch="$( \
+    _get_epoch)"
+  _get_epoch_fsuuid \
+    "${_epoch}"
 }
 
 # Returns an unique uuid
@@ -67,6 +77,9 @@ _get_epoch_fsuuid() {
   local \
     _epoch="${1}" \
     _uuidgen_opts=()
+  if [[ "${_epoch}" == "" ]]; then
+    _epoch="${SOURCE_DATE_EPOCH}"
+  fi
   _uuidgen_opts=(
     --sha1
     --namespace
@@ -81,64 +94,67 @@ _get_epoch_fsuuid() {
 # Gets an ext4-compatible uuid from a date
 # $1: datetime in UNIX time
 _epoch_to_uuid() {
-    local \
-      _epoch="${1}" \
-      _uuid
-    TZ=UTC \
-    printf \
-      -v \
-        _uuid \
-      '%(%F-%H-%M-%S-00)T' \
-      "${_epoch}"
-    echo \
-      "${_uuid}"
+  local \
+    _epoch="${1}" \
+    _uuid
+  if [[ "${_epoch}" == "" ]]; then
+    _epoch="${SOURCE_DATE_EPOCH}"
+  fi
+  TZ=UTC \
+  printf \
+    -v \
+      _uuid \
+    '%(%F-%H-%M-%S-00)T' \
+    "${_epoch}"
+  echo \
+    "${_uuid}"
 }
 
 _get_size() {
-    local \
-      _dir="${1}"
-    echo \
-      $( \
-        du \
-          -s \
-          "${_dir}" | \
-          cut \
-            -f \
-              1)
+  local \
+    _dir="${1}"
+  echo \
+    $(du \
+        -s \
+        "${_dir}" | \
+        cut \
+          -f \
+            1)
 }
 
-## EROFS
+## BTRFS (GNU)
 
 # Creates an EROFS image given a directory.
 # $1: resulting image
 # $2: input directory
 # $3: UNIX time (to generate a date-based uuid)
 _run_mkbtrfs() {
-    local _image_path="${1}"
-          _size="${2}" \
-          _dir="${3}" \
-          _epoch="${4}" \
-          _label="${5}" \
-          fsuuid
-    fsuuid="$(_get_epoch_fsuuid "${_epoch}")"
-    [[ "${_size}" == "" ]] && \
-      echo "autosize"
-    [[ ! "${quiet}" == "y" ]] || \
-      mkfs_btrfs_options+=('--quiet')
-    _msg_info "Creating BTRFS image"
-    _msg_info "Directory: ${_dir}"
-    _msg_info "Size: ${_size}"
-    _msg_info "Image path: ${_image_path}"
-    _msg_info "UUID: ${fsuuid}"
-    _msg_info "this may take a while..."
-    mkfs_btrfs_options+=(
-      '-L' "${_label}"
-      '-U' "${fsuuid}"
-      "${_mkfs_options[@]}")
-    mkfs.erofs "${mkfs_erofs_options[@]}" -- \
-               "${_image_path}" \
-               "${_dir}"
-    _msg_info "Done!"
+  local \
+    _image_path="${1}"
+    _size="${2}" \
+    _dir="${3}" \
+    _epoch="${4}" \
+    _label="${5}" \
+    fsuuid
+  fsuuid="$(_get_epoch_fsuuid "${_epoch}")"
+  [[ "${_size}" == "" ]] && \
+    echo "autosize"
+  [[ ! "${quiet}" == "y" ]] || \
+    mkfs_btrfs_options+=('--quiet')
+  _msg_info "Creating BTRFS image"
+  _msg_info "Directory: ${_dir}"
+  _msg_info "Size: ${_size}"
+  _msg_info "Image path: ${_image_path}"
+  _msg_info "UUID: ${fsuuid}"
+  _msg_info "this may take a while..."
+  mkfs_btrfs_options+=(
+    '-L' "${_label}"
+    '-U' "${fsuuid}"
+    "${_mkfs_options[@]}")
+  mkfs.erofs "${mkfs_erofs_options[@]}" -- \
+             "${_image_path}" \
+             "${_dir}"
+  _msg_info "Done!"
 }
 
 ## EROFS
@@ -1426,6 +1442,10 @@ _set_overrides() {
     "$(_get_date_human)"
   _set_override \
     "img" \
+    "uuid" \
+    "$(_img_uuid_auto_detect)"
+  _set_override \
+    "img" \
     "tuple" \
     "auto"
   _set_override \
@@ -1489,6 +1509,8 @@ usage:
     [options]
     [<out_file>]
   options:
+     -u <uuid>            Image UUID
+                          Default: $(_get "img" "uuid")
      -f <img_tuple>       Image format tuple, written as
                           '<container>+...+<container>+<fs>'
                           Default: $(_get "img" "tuple")
@@ -1549,6 +1571,7 @@ _show_config() {
   _msg_info "$(_get "app" "name") configuration"
   _msg_info "            Creation date:   $(_get "creation" "date")"
   _msg_info "           Output file(s):   ${out_files[*]}"
+  _msg_info "               Image UUID:   $(_get "img" "uuid")"
   _msg_info "       Image format tuple:   $(_get "img" "tuple")"
   _msg_info "               Image size:   $(_get "img" "size")"
   _msg_info "              Image label:   $(_get "img" "label")"
@@ -1571,10 +1594,11 @@ _config_user_init \
 # shellcheck disable=SC2034
 while \
   getopts \
-    'f:d:s:n:l:K:k:wtgcvh?' \
+    'u:f:d:s:n:l:K:k:wtgcvh?' \
     arg; do
   case \
     "${arg}" in
+    u) override_img_uuid="${OPTARG}" ;;
     f) override_img_tuple="${OPTARG}" ;;
     d) override_input_directory="${OPTARG}" ;;
     s) override_img_size="${OPTARG}" ;;
@@ -1624,7 +1648,10 @@ out_files=(
     0 && \
   _usage \
     1
-mkimg_opts=(
+app_opts+=(
+  "$(_get \
+       "img" \
+        "uuid")"
   "$(_get \
        "img" \
         "tuple")"
@@ -1635,6 +1662,6 @@ mkimg_opts=(
   )
 _show_config
 _mkimg \
-  "${mkimg_opts[@]}"
+  "${app_opts[@]}"
 
 # vim:set sw=2 sts=-1 et:
