@@ -60,16 +60,6 @@ _get_epoch() {
       SOURCE_DATE_EPOCH ))
 }
 
-_img_uuid_auto_detect() {
-  local \
-    _epoch \
-    _uuid
-  _epoch="$( \
-    _get_epoch)"
-  _get_epoch_fsuuid \
-    "${_epoch}"
-}
-
 # Returns an unique uuid
 # given a datetime in UNIX time
 # $1: UNIX time
@@ -163,20 +153,26 @@ _run_mkbtrfs() {
 # $2: input directory
 # $3: UNIX time (to generate a date-based uuid)
 _run_mkerofs() {
-    local _image_path="${1}"
-    local _dir="${2}"
-    local _epoch="${3}"
-    local fsuuid
-    fsuuid="$(_get_epoch_fsuuid "${_epoch}")"
-    [[ ! "${quiet}" == "y" ]] || \
-      mkfs_erofs_options+=('--quiet')
+    local \
+      _image_path="${1}" \
+      _dir="${2}" \
+      _epoch="${3}" \
+      fsuuid
+    fsuuid="$( \
+      _get_epoch_fsuuid "${_epoch}")"
+    if [[ "${quiet}" == "y" ]]; then 
+      mkfs_erofs_options+=(
+        '--quiet')
+    fi
     mkfs_erofs_options+=(
-      '-U' "${fsuuid}"
-      "${_mkfs_options[@]}")
-    mkfs.erofs "${mkfs_erofs_options[@]}" -- \
-               "${_image_path}" \
-               "${_dir}"
-    _msg_info "Done!"
+      '-U'
+        "${fsuuid}"
+      "${_mkfs_options[@]}"
+    )
+    mkfs.erofs \
+      "${mkfs_erofs_options[@]}" -- \
+      "${_image_path}" \
+      "${_dir}"
 }
 
 ## EXT4
@@ -189,56 +185,84 @@ _run_mkerofs() {
 # $4: partition label
 # $5: if true the file system image will be writable
 _run_mkext4() {
-    local \
-      _dir="${1}" \
-      _image_path="${1}.img" \
-      _size="${2}" \
-      _epoch="${3}" \
-      _label="${4}" \
-      _writable="${5}" \
-      _fsuuid \
-      ext4_hash_seed \
-      mkfs_ext4_options=()
-    _fsuuid="$(_epoch_to_uuid "${_epoch}")"
-
-    ext4_hash_seed="$(uuidgen --sha1 \
-                              --namespace ${epoch_namespace} \
-                              --name "${_epoch} ext4 hash seed")"
-    _ext_opts=(
-      "lazy_itable_init=0"
-      "root_owner=0:0"
-      "hash_seed=${ext4_hash_seed}")
-    mkfs_ext4_options=(
-      '-d' "${_dir}"
-      '-O' '^has_journal,^resize_inode'
-      '-E' "$(IFS=, ; echo ${_ext_opts[*]})"
-      '-m' '0'
-      '-F'
-      '-b' 4096
-      '-U' 'clear')
-    [[ "${_label}" != "" ]] && \
-      mkfs_ext4_options+=('-L' "${_label}")
-    [[ ! "${quiet}" == "y" ]] || \
-      mkfs_ext4_options+=('-q')
-    if [[ ! "${quiet}" == "y" ]]; then
-        E2FSPROGS_FAKE_TIME="${_epoch}" \
-          mkfs.ext4 "${mkfs_ext4_options[@]}" -- \
-                    "${_image_path}" \
-                    "${_size}K"
-    else
-        E2FSPROGS_FAKE_TIME="${_epoch}" \
-          mkfs.ext4 "${mkfs_ext4_options[@]}" -- \
-                    "${_image_path}" \
-                    "${_size}K" > /dev/null 2>&1
-    fi
-    tune2fs -c 0 \
-            -i 0 -- \
-            "${_image_path}" > /dev/null
-    if [ "${_writable}" != "true" ]; then
-        tunefs -O read-only \
-               "${_image_path}"
-    fi
-    _msg_info "Done!"
+  local \
+    _dir="${1}" \
+    _image_path="${1}.img" \
+    _size="${2}" \
+    _epoch="${3}" \
+    _label="${4}" \
+    _writable="${5}" \
+    _fsuuid \
+    ext4_hash_seed \
+    mkfs_ext4_options=() \
+    _ext_opts=()
+  _fsuuid="$( \
+    _epoch_to_uuid \
+      "${_epoch}")"
+  _uuidgen_opts=(
+    --sha1
+    --namespace
+      "${epoch_namespace}"
+    --name
+      "${_epoch}"
+    "ext4"
+    "hash"
+    "seed"  
+  )
+  ext4_hash_seed="$( \
+    uuidgen \
+      "${_epoch_opts[@]}")"
+  _ext_opts=(
+    "lazy_itable_init=0"
+    "root_owner=0:0"
+    "hash_seed=${ext4_hash_seed}")
+  mkfs_ext4_options=(
+    -d
+      "${_dir}"
+    -O
+      '^has_journal,^resize_inode'
+    -E
+      "$(IFS=, ; echo ${_ext_opts[*]})"
+    -m
+      0
+    -F
+    -b
+      4096
+    -U
+      'clear'
+    )
+  [[ "${_label}" != "" ]] && \
+    mkfs_ext4_options+=('-L' "${_label}")
+  if [[  "${quiet}" == "y" ]]; then
+    mkfs_ext4_options+=(
+      -q
+    )
+  fi
+  if [[ "${quiet}" == "n" ]]; then
+    E2FSPROGS_FAKE_TIME="${_epoch}" \
+    mkfs.ext4 \
+      "${mkfs_ext4_options[@]}" -- \
+      "${_image_path}" \
+      "${_size}K"
+  elif [[ "${quiet}" == "n" ]]; then
+    E2FSPROGS_FAKE_TIME="${_epoch}" \
+    mkfs.ext4 \
+      "${mkfs_ext4_options[@]}" -- \
+      "${_image_path}" \
+      "${_size}K" > /dev/null 2>&1
+  fi
+  tune2fs \
+    -c \
+      0 \
+    -i \
+      0 -- \
+    "${_image_path}" > /dev/null
+  if [ "${_writable}" != "true" ]; then
+    tunefs \
+      -O \
+        read-only \
+      "${_image_path}"
+  fi
 }
 
 ## FAT
@@ -1356,15 +1380,15 @@ _validate_requirements_image_type_squashfs() {
 
 # BTRFS over LUKS
 _validate_requirements_image_type_btrfs+luks() {
-    _validate_requirements_image_type_luks
-    _validate_requirements_image_type_btrfs
+  _validate_requirements_image_type_luks
+  _validate_requirements_image_type_btrfs
 }
 
 
 # EROFS over LUKS
 _validate_requirements_image_type_erofs+luks() {
-    _validate_requirements_image_type_luks
-    _validate_requirements_image_type_erofs
+  _validate_requirements_image_type_luks
+  _validate_requirements_image_type_erofs
 }
 
 # EXT4 over LUKS
@@ -1376,41 +1400,26 @@ _validate_requirements_image_type_ext4+luks() {
 
 # EXT4 over SQUASHFS
 _validate_requirements_image_type_ext4+squashfs() {
-    _validate_requirements_image_type_ext4
-    _validate_requirements_image_type_squashfs
+  _validate_requirements_image_type_ext4
+  _validate_requirements_image_type_squashfs
 }
 
 # SQUASHFS over LUKS
 _validate_requirements_image_type_squashfs+luks() {
-    _validate_requirements_image_type_luks
-    _validate_requirements_image_type_squashfs
+  _validate_requirements_image_type_luks
+  _validate_requirements_image_type_squashfs
 }
 
 ## 3-layered image types
 
 # EXT4 over SQUASHFS over LUKS
 _validate_requirements_image_type_ext4+squashfs+luks() {
-    _validate_requirements_image_type_luks
-    _validate_requirements_image_type_squashfs
-    _validate_requirements_image_type_ext4
+  _validate_requirements_image_type_luks
+  _validate_requirements_image_type_squashfs
+  _validate_requirements_image_type_ext4
 }
 
-_img_tuple_auto_detect() {
-  local \
-    _tuple \
-    _os
-  _tuple="btrfs+luks+raid1"
-  _os="$( \
-    uname \
-      -o)"
-  # mdadm is still unbuilt on Android
-  if \
-    [[ "${_os}" == "Android" ]]; then
-    _tuple="ext4+luks"
-  fi
-  echo \
-    "${_tuple}"
-}
+
 
 # Produces a file system image
 # $1: value in 'fs_images'
@@ -1423,12 +1432,6 @@ _mkimg() {
   _imgs=(
     "$@"
   )
-  if [[ "${_type}" == "auto" ]]; then
-    _type="$( \
-      _img_tuple_auto_detect)"
-    _msg_info \
-      "auto-selected image type '${_type}'"
-  fi
   rm \
     -f -- \
     "${_imgs[@]}"
@@ -1462,6 +1465,32 @@ _get_conf_path() {
     "${_conf}"
 }
 
+_img_uuid_auto_detect() {
+  local \
+    _epoch \
+    _uuid
+  _epoch="$( \
+    _get_epoch)"
+  _get_epoch_fsuuid \
+    "${_epoch}"
+}
+
+_img_tuple_auto_detect() {
+  local \
+    _tuple \
+    _os
+  _tuple="btrfs+luks+raid1"
+  _os="$( \
+    uname \
+      -o)"
+  # mdadm is still unbuilt on Android
+  if \
+    [[ "${_os}" == "Android" ]]; then
+    _tuple="ext4+luks"
+  fi
+  echo \
+    "${_tuple}"
+}
 _set_overrides() {
   _set_override \
     "creation" \
@@ -1474,7 +1503,7 @@ _set_overrides() {
   _set_override \
     "img" \
     "tuple" \
-    "auto"
+    "$(_img_tuple_auto_detect)"
   _set_override \
     "img" \
     "size" \
