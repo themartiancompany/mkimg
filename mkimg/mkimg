@@ -1,6 +1,25 @@
 #!/usr/bin/env bash
+
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+#    ----------------------------------------------------------------------
+#    Copyright © 2024, 2025  Pellegrino Prevete
 #
-# SPDX-License-Identifier: AGPL-3.0-or-later
+#    All rights reserved
+#    ----------------------------------------------------------------------
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU Affero General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU Affero General Public License for more details.
+#
+#    You should have received a copy of the GNU Affero General Public License
+#    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 _bin="$( \
   dirname \
@@ -1677,6 +1696,7 @@ _set_overrides() {
 # $1: exit status number.
 _usage() {
   local \
+    _exit_code="${1}" \
     _usage_text
   IFS='' \
     read \
@@ -1684,59 +1704,67 @@ _usage() {
       -d '' \
       _usage_text << \
         ENDUSAGETEXT || true
-Produces a volume image
+
+Produces a volume image.
+
 usage:
-  $(_get "app" "name")
+
+  ${app_name}
     [options]
     [<out_file>]
-  options:
-     -u <uuid>            Image UUID
-                          Default: $(_get "img" "uuid")
-     -f <img_tuple>       Image format tuple, written as
-                          '<container>+...+<container>+<fs>'
-                          Default: $(_get "img" "tuple")
-     -d <directory>       Specify input directory
-     -s <size>            Specify a size fon the image
-     -n <img_name>        LUKs container image name (if enabled)
-                          Default: $(_get "img" "name")
-     -l <img_label>       Image label
-                          Default: $(_get "img" "label")
-     -K <key_type>        LUKS container encryption key type
-                          ('auto', 'passphrase', 'file')
-                          Default: $(_get "key" "type")
-     -k <encryption_key>  LUKS container encryption key
-                          Default: $(_get "encryption" "key")
-     -w <bool>            Specify whether the image is intended to be writable
-                          Default: $(_get "img" "writable")
-     -g <bool>            Specify whether the image is intended to be able
-                          to be opened by GRUB
-                          Default: $(_get "grub" "support")
-     -x <bool>            Specify whether enable compression
-                          Default: $(_get "img" "compression")
-     -t                   Only verify if requirements
-                          to produce the image are satisfied.
-                          Default: $(_get "validate" "only")
-     -m                   UUID auto generation type
-                          Values are 'default' and 'epoch'
-                          Default: '$(_get "uuid" "type")'
-     -h                   This message.
-     -c                   Enable color output
-     -v                   Enable verbose output
+
   file systems:
      ext4                 Ext4 file system
      erofs                Enhanced read only file system
      btrfs                Better file system
      squashfs             Squash file system
+
   containers:
      squashfs             Squash can act also as a container
      luks                 LUKS2 (encrypted) filesystem container
      raid0                RAID0 filesystem container
+
+  options:
+     -u <uuid>            Image UUID
+                          Default: ${img_uuid})
+     -f <img_tuple>       Image format tuple, written as
+                          '<container>+...+<container>+<fs>'
+                          Default: ${img_tuple})
+     -d <directory>       Specify input directory
+     -s <size>            Specify a size fon the image
+     -n <img_name>        LUKs container image name (if enabled)
+                          Default: ${img_name}
+     -l <img_label>       Image label
+                          Default: ${img_label}
+     -K <key_type>        LUKS container encryption key type
+                          ('auto', 'passphrase', 'file')
+                          Default: ${key_type}
+     -k <encryption_key>  LUKS container encryption key
+                          Default: ${encryption_key}
+     -w <bool>            Specify whether the image is intended to be writable
+                          Default: ${img_writable}
+     -g <bool>            Specify whether the image is intended to be able
+                          to be opened by GRUB
+                          Default: ${grub_support}
+     -x <bool>            Specify whether enable compression
+                          Default: ${img_compression}
+     -t                   Only verify if requirements
+                          to produce the image are satisfied.
+                          Default: ${validate_only}
+     -m                   UUID auto generation type
+                          Values are 'default' and 'epoch'
+                          Default: '${uuid_type}'
+
+     -h                   This message.
+     -c                   Enable color output
+     -v                   Enable verbose output
+
 ENDUSAGETEXT
   _printf \
     '%s\n' \
     "${_usage_text}"
   exit \
-    "${1}"
+    "${_exit_code}"
 }
 
 _display_flags() {
@@ -1805,7 +1833,7 @@ while \
            0 ;;
     *)
     _msg_error \
-      "Invalid argument '${arg}'" \
+      "Invalid argument '${arg}'." \
       0
     _usage \
       1
@@ -1820,7 +1848,7 @@ _set_overrides
 if (( $# < 1 )) && \
    [[ "${validate_only}" == false ]]; then
   _msg_error \
-    "no output image(s) specified" \
+    "No output image(s) specified." \
     0
   _set_overrides
   _usage \
